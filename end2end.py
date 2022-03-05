@@ -3,6 +3,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from models import SegDecNet
+from liz_model import LizNet
 import numpy as np
 import os
 from torch import nn as nn
@@ -56,6 +57,7 @@ class End2End:
 
         tensorboard_writer = SummaryWriter(log_dir=self.tensorboard_path) if WRITE_TENSORBOARD else None
 
+        self._log("Starting training")
         train_results = self._train_model(device, model, train_loader, loss_seg, loss_dec, optimizer, validation_loader, tensorboard_writer)
         self._save_train_results(train_results)
         self._save_model(model)
@@ -354,7 +356,10 @@ class End2End:
         list(map(utils.create_folder, [self.run_path, self.model_path, self.outputs_path, ]))
 
     def _get_model(self):
-        seg_net = SegDecNet(self._get_device(), self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT, self.cfg.INPUT_CHANNELS)
+        if self.cfg.MY:
+            seg_net = LizNet(self._get_device(), self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT, self.cfg.INPUT_CHANNELS)
+        else:
+            seg_net = SegDecNet(self._get_device(), self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT, self.cfg.INPUT_CHANNELS)
         return seg_net
 
     def print_run_params(self):

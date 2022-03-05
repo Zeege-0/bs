@@ -1,4 +1,7 @@
 class Config:
+
+    MY = None
+
     GPU = None
 
     RUN_NAME = None
@@ -94,6 +97,7 @@ class Config:
             raise Exception('Unknown dataset {}'.format(self.DATASET))
 
     def merge_from_args(self, args):
+        self.MY = args.MY
         self.GPU = args.GPU
         self.RUN_NAME = args.RUN_NAME
         self.DATASET = args.DATASET
@@ -125,6 +129,7 @@ class Config:
 
     def get_as_dict(self):
         params = {
+            "MY": self.MY,
             "GPU": self.GPU,
             "DATASET": self.DATASET,
             "DATASET_PATH": self.DATASET_PATH,
@@ -161,6 +166,7 @@ class Config:
 def load_from_dict(dictionary):
     cfg = Config()
 
+    cfg.MY = dictionary.get("MY", None)
     cfg.GPU = dictionary.get("GPU", None)
     cfg.DATASET = dictionary.get("DATASET", None)
     cfg.DATASET_PATH = dictionary.get("DATASET_PATH", None)
