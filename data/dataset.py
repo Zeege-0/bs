@@ -1,3 +1,4 @@
+from typing import Tuple
 import cv2
 import numpy as np
 import torch
@@ -12,7 +13,7 @@ class Dataset(torch.utils.data.Dataset):
         self.path: str = path
         self.cfg: Config = cfg
         self.kind: str = kind
-        self.image_size: (int, int) = (self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT)
+        self.image_size: Tuple[int, int] = (self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT)
         self.grayscale: bool = self.cfg.INPUT_CHANNELS == 1
 
         self.num_negatives_per_one_positive: int = 1
@@ -24,7 +25,7 @@ class Dataset(torch.utils.data.Dataset):
 
         self.neg_retrieval_freq = np.zeros(shape=self.num_neg)
 
-    def __getitem__(self, index) -> (torch.Tensor, torch.Tensor, torch.Tensor, bool, str):
+    def __getitem__(self, index) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool, str]:
 
         if self.counter >= self.len:
             self.counter = 0
@@ -99,7 +100,7 @@ class Dataset(torch.utils.data.Dataset):
             img = cv2.resize(img, dsize=resize_dim)
         return np.array(img, dtype=np.float32) / 255.0
 
-    def read_label_resize(self, path, resize_dim, dilate=None) -> (np.ndarray, bool):
+    def read_label_resize(self, path, resize_dim, dilate=None) -> Tuple[np.ndarray, bool]:
         lbl = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
         if dilate is not None and dilate > 1:
             lbl = cv2.dilate(lbl, np.ones((dilate, dilate)))

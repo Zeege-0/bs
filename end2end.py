@@ -127,7 +127,7 @@ class End2End:
 
         return total_loss_seg, total_loss_dec, total_loss, total_correct
 
-    def _train_model(self, device, model, train_loader, criterion_seg, criterion_dec, optimizer, validation_set, tensorboard_writer):
+    def _train_model(self, device, model: nn.Module, train_loader, criterion_seg, criterion_dec, optimizer, validation_set, tensorboard_writer):
         losses = []
         validation_data = []
         max_validation = -1
