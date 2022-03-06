@@ -5,6 +5,21 @@ import torch.nn.functional as F
 
 __all__ = ["CFPNet"]
 
+
+class BNPReLU(nn.Module):
+    def __init__(self, nIn):
+        super().__init__()
+        self.bn = nn.BatchNorm2d(nIn, eps=1e-3)
+        self.acti = nn.PReLU(nIn)
+
+    def forward(self, input):
+        output = self.bn(input)
+        output = self.acti(output)
+
+        return output
+
+
+
 class DeConv(nn.Module):
     def __init__(self, nIn, nOut, kSize, stride, padding, output_padding, dilation=(1, 1), groups=1, bn_acti=False, bias=False):
         super().__init__()
@@ -28,7 +43,7 @@ class DeConv(nn.Module):
     
     
 
-class Conv(nn.Module):
+class ConvBN(nn.Module):
     def __init__(self, nIn, nOut, kSize, stride, padding, dilation=(1, 1), groups=1, bn_acti=False, bias=False):
         super().__init__()
 
@@ -50,18 +65,24 @@ class Conv(nn.Module):
         return output
 
 
-class BNPReLU(nn.Module):
-    def __init__(self, nIn):
+class FPExtractor(nn.Module):
+    """
+    Feature Pyramid Extractor
+    """
+    def __init__(self, filters, ksize=3, stride=1, padding='same', dilation=(1, 1), groups=1, bias=False):
         super().__init__()
-        self.bn = nn.BatchNorm2d(nIn, eps=1e-3)
-        self.acti = nn.PReLU(nIn)
+
+        self.x_1 = ConvBN(filters // 4, filters // 4, ksize=ksize, dilation=dilation, stride=stride, groups=filters // 4, groups=groups, bn_acti=True, bias=bias)
+        self.x_2 = ConvBN(filters // 4, filters // 4, ksize=ksize, dilation=dilation, stride=stride, groups=filters // 4, groups=groups, bn_acti=True, bias=bias)
+        self.x_3 = ConvBN(filters // 2, filters // 2, ksize=ksize, dilation=dilation, stride=stride, groups=filters // 2, groups=groups, bn_acti=True, bias=bias)
 
     def forward(self, input):
-        output = self.bn(input)
-        output = self.acti(output)
-
-        return output
-
+        o_1 = self.x_1(input)
+        o_2 = self.x_2(o_1)
+        o_3 = self.x_3(o_2)
+        cat = torch.cat([o_1, o_2, o_3], 1)
+        cat = nn.BatchNorm2d(cat.size(1), eps=1e-3)(cat)
+        return cat
 
 
 class CFPModule(nn.Module):
@@ -70,72 +91,72 @@ class CFPModule(nn.Module):
         
         self.bn_relu_1 = BNPReLU(nIn)
         self.bn_relu_2 = BNPReLU(nIn)
-        self.conv1x1_1 = Conv(nIn, nIn // 4, KSize, 1, padding=1, bn_acti=True)
+        self.conv1x1_1 = ConvBN(nIn, nIn // 4, KSize, 1, padding=1, bn_acti=True)
         
-        self.dconv3x1_4_1 = Conv(nIn // 4, nIn // 16, (dkSize, 1), 1,
+        self.dconv3x1_4_1 = ConvBN(nIn // 4, nIn // 16, (dkSize, 1), 1,
                               padding=(1*d+1, 0), dilation=(d+1,1), groups = nIn //16, bn_acti=True)
-        self.dconv1x3_4_1 = Conv(nIn // 16, nIn // 16, (1, dkSize), 1,
+        self.dconv1x3_4_1 = ConvBN(nIn // 16, nIn // 16, (1, dkSize), 1,
                               padding=(0, 1*d+1), dilation=(1,d+1), groups = nIn //16, bn_acti=True)
         
-        self.dconv3x1_4_2 = Conv(nIn // 16, nIn // 16, (dkSize, 1), 1,
+        self.dconv3x1_4_2 = ConvBN(nIn // 16, nIn // 16, (dkSize, 1), 1,
                               padding=(1*d+1, 0), dilation=(d+1,1),groups = nIn //16, bn_acti=True)
-        self.dconv1x3_4_2 = Conv(nIn // 16, nIn // 16, (1, dkSize), 1,
+        self.dconv1x3_4_2 = ConvBN(nIn // 16, nIn // 16, (1, dkSize), 1,
                               padding=(0, 1*d+1), dilation=(1,d+1),groups = nIn //16, bn_acti=True)        
         
-        self.dconv3x1_4_3 = Conv(nIn // 16, nIn // 8, (dkSize, 1), 1,
+        self.dconv3x1_4_3 = ConvBN(nIn // 16, nIn // 8, (dkSize, 1), 1,
                               padding=(1*d+1, 0), dilation=(d+1,1),groups = nIn //16, bn_acti=True)
-        self.dconv1x3_4_3 = Conv(nIn // 8, nIn // 8, (1, dkSize), 1,
+        self.dconv1x3_4_3 = ConvBN(nIn // 8, nIn // 8, (1, dkSize), 1,
                               padding=(0, 1*d+1), dilation=(1,d+1),groups = nIn //8, bn_acti=True) 
         
-        self.dconv3x1_1_1 = Conv(nIn // 4, nIn // 16, (dkSize, 1), 1,
+        self.dconv3x1_1_1 = ConvBN(nIn // 4, nIn // 16, (dkSize, 1), 1,
                               padding=(1, 0),groups = nIn //16, bn_acti=True)
-        self.dconv1x3_1_1 = Conv(nIn // 16, nIn // 16, (1, dkSize), 1,
+        self.dconv1x3_1_1 = ConvBN(nIn // 16, nIn // 16, (1, dkSize), 1,
                               padding=(0, 1),groups = nIn //16, bn_acti=True)
         
-        self.dconv3x1_1_2 = Conv(nIn // 16, nIn // 16, (dkSize, 1), 1,
+        self.dconv3x1_1_2 = ConvBN(nIn // 16, nIn // 16, (dkSize, 1), 1,
                               padding=(1, 0),groups = nIn //16, bn_acti=True)
-        self.dconv1x3_1_2 = Conv(nIn // 16, nIn // 16, (1, dkSize), 1,
+        self.dconv1x3_1_2 = ConvBN(nIn // 16, nIn // 16, (1, dkSize), 1,
                               padding=(0, 1),groups = nIn //16, bn_acti=True)
         
-        self.dconv3x1_1_3 = Conv(nIn // 16, nIn // 8, (dkSize, 1), 1,
+        self.dconv3x1_1_3 = ConvBN(nIn // 16, nIn // 8, (dkSize, 1), 1,
                               padding=(1, 0),groups = nIn //16, bn_acti=True)
-        self.dconv1x3_1_3 = Conv(nIn // 8, nIn // 8, (1, dkSize), 1,
+        self.dconv1x3_1_3 = ConvBN(nIn // 8, nIn // 8, (1, dkSize), 1,
                               padding=(0, 1),groups = nIn //8, bn_acti=True)
         
         
-        self.dconv3x1_2_1 = Conv(nIn // 4, nIn // 16, (dkSize, 1), 1,
+        self.dconv3x1_2_1 = ConvBN(nIn // 4, nIn // 16, (dkSize, 1), 1,
                               padding=(int(d/4+1), 0), dilation=(int(d/4+1),1), groups = nIn //16, bn_acti=True)
-        self.dconv1x3_2_1 = Conv(nIn // 16, nIn // 16, (1, dkSize), 1,
+        self.dconv1x3_2_1 = ConvBN(nIn // 16, nIn // 16, (1, dkSize), 1,
                               padding=(0, int(d/4+1)), dilation=(1,int(d/4+1)), groups = nIn //16, bn_acti=True)
         
-        self.dconv3x1_2_2 = Conv(nIn // 16, nIn // 16, (dkSize, 1), 1,
+        self.dconv3x1_2_2 = ConvBN(nIn // 16, nIn // 16, (dkSize, 1), 1,
                               padding=(int(d/4+1), 0), dilation=(int(d/4+1),1),groups = nIn //16, bn_acti=True)
-        self.dconv1x3_2_2 = Conv(nIn // 16, nIn // 16, (1, dkSize), 1,
+        self.dconv1x3_2_2 = ConvBN(nIn // 16, nIn // 16, (1, dkSize), 1,
                               padding=(0, int(d/4+1)), dilation=(1,int(d/4+1)),groups = nIn //16, bn_acti=True)        
         
-        self.dconv3x1_2_3 = Conv(nIn // 16, nIn // 8, (dkSize, 1), 1,
+        self.dconv3x1_2_3 = ConvBN(nIn // 16, nIn // 8, (dkSize, 1), 1,
                               padding=(int(d/4+1), 0), dilation=(int(d/4+1),1),groups = nIn //16, bn_acti=True)
-        self.dconv1x3_2_3 = Conv(nIn // 8, nIn // 8, (1, dkSize), 1,
+        self.dconv1x3_2_3 = ConvBN(nIn // 8, nIn // 8, (1, dkSize), 1,
                               padding=(0, int(d/4+1)), dilation=(1,int(d/4+1)),groups = nIn //8, bn_acti=True)         
         
         
         
-        self.dconv3x1_3_1 = Conv(nIn // 4, nIn // 16, (dkSize, 1), 1,
+        self.dconv3x1_3_1 = ConvBN(nIn // 4, nIn // 16, (dkSize, 1), 1,
                               padding=(int(d/2+1), 0), dilation=(int(d/2+1),1), groups = nIn //16, bn_acti=True)
-        self.dconv1x3_3_1 = Conv(nIn // 16, nIn // 16, (1, dkSize), 1,
+        self.dconv1x3_3_1 = ConvBN(nIn // 16, nIn // 16, (1, dkSize), 1,
                               padding=(0, int(d/2+1)), dilation=(1,int(d/2+1)), groups = nIn //16, bn_acti=True)
         
-        self.dconv3x1_3_2 = Conv(nIn // 16, nIn // 16, (dkSize, 1), 1,
+        self.dconv3x1_3_2 = ConvBN(nIn // 16, nIn // 16, (dkSize, 1), 1,
                               padding=(int(d/2+1), 0), dilation=(int(d/2+1),1),groups = nIn //16, bn_acti=True)
-        self.dconv1x3_3_2 = Conv(nIn // 16, nIn // 16, (1, dkSize), 1,
+        self.dconv1x3_3_2 = ConvBN(nIn // 16, nIn // 16, (1, dkSize), 1,
                               padding=(0, int(d/2+1)), dilation=(1,int(d/2+1)),groups = nIn //16, bn_acti=True)        
         
-        self.dconv3x1_3_3 = Conv(nIn // 16, nIn // 8, (dkSize, 1), 1,
+        self.dconv3x1_3_3 = ConvBN(nIn // 16, nIn // 8, (dkSize, 1), 1,
                               padding=(int(d/2+1), 0), dilation=(int(d/2+1),1),groups = nIn //16, bn_acti=True)
-        self.dconv1x3_3_3 = Conv(nIn // 8, nIn // 8, (1, dkSize), 1,
+        self.dconv1x3_3_3 = ConvBN(nIn // 8, nIn // 8, (1, dkSize), 1,
                               padding=(0, int(d/2+1)), dilation=(1,int(d/2+1)),groups = nIn //8, bn_acti=True)              
         
-        self.conv1x1 = Conv(nIn, nIn, 1, 1, padding=0,bn_acti=False)
+        self.conv1x1 = ConvBN(nIn, nIn, 1, 1, padding=0,bn_acti=False)
         
     def forward(self, input):
         inp = self.bn_relu_1(input)
@@ -198,16 +219,16 @@ class DownSamplingBlock(nn.Module):
         else:
             nConv = nOut
 
-        self.conv3x3 = Conv(nIn, nConv, kSize=3, stride=2, padding=1)
-        self.max_pool = nn.MaxPool2d(2, stride=2)
+        self.conv3x3 = ConvBN(nIn, nConv, kSize=3, stride=2, padding=1)
+        self.avg_pool = nn.AvgPool2d(2, stride=2)
         self.bn_prelu = BNPReLU(nOut)
 
     def forward(self, input):
         output = self.conv3x3(input)
 
         if self.nIn < self.nOut:
-            max_pool = self.max_pool(input)
-            output = torch.cat([output, max_pool], 1)
+            avg_pool = self.avg_pool(input)
+            output = torch.cat([output, avg_pool], 1)
 
         output = self.bn_prelu(output)
 
@@ -232,9 +253,9 @@ class CFPEncoder(nn.Module):
     def __init__(self, input_channels, block_1=2, block_2=6):
         super().__init__()
         self.init_conv = nn.Sequential(
-            Conv(input_channels, 32, 3, 2, padding=1, bn_acti=True),
-            Conv(32, 32, 3, 1, padding=1, bn_acti=True),
-            Conv(32, 32, 3, 1, padding=1, bn_acti=True),
+            ConvBN(input_channels, 32, 3, 2, padding=1, bn_acti=True),
+            ConvBN(32, 32, 3, 1, padding=1, bn_acti=True),
+            ConvBN(32, 32, 3, 1, padding=1, bn_acti=True),
         )
 
         self.down_1 = InputInjection(1)  # down-sample the image 1 times
@@ -242,7 +263,7 @@ class CFPEncoder(nn.Module):
         self.down_3 = InputInjection(3)  # down-sample the image 3 times
 
         self.bn_prelu_1 = BNPReLU(32 + 1)
-        dilation_block_1 =[2,2]
+        dilation_block_1 =[2, 2]
         # CFP Block 1
         self.downsample_1 = DownSamplingBlock(32 + 1, 64)
         self.CFP_Block_1 = nn.Sequential()
@@ -252,7 +273,7 @@ class CFPEncoder(nn.Module):
         self.bn_prelu_2 = BNPReLU(128 + 1)
 
         # CFP Block 2
-        dilation_block_2 = [4,4,8,8,16,16] #camvid #cityscapes [4,4,8,8,16,16] # [4,8,16]
+        dilation_block_2 = [4, 4, 8, 8, 16, 16] #camvid #cityscapes [4,4,8,8,16,16] # [4,8,16]
         self.downsample_2 = DownSamplingBlock(128 + 1, 128)
         self.CFP_Block_2 = nn.Sequential()
         for i in range(0, block_2):
@@ -286,9 +307,9 @@ class CFPNet(nn.Module):
     def __init__(self, classes, block_1=2, block_2=6):
         super().__init__()
         self.init_conv = nn.Sequential(
-            Conv(3, 32, 3, 2, padding=1, bn_acti=True),
-            Conv(32, 32, 3, 1, padding=1, bn_acti=True),
-            Conv(32, 32, 3, 1, padding=1, bn_acti=True),
+            ConvBN(3, 32, 3, 2, padding=1, bn_acti=True),
+            ConvBN(32, 32, 3, 1, padding=1, bn_acti=True),
+            ConvBN(32, 32, 3, 1, padding=1, bn_acti=True),
         )
 
         self.down_1 = InputInjection(1)  # down-sample the image 1 times
@@ -314,7 +335,7 @@ class CFPNet(nn.Module):
                                         CFPModule(128, d=dilation_block_2[i]))
         self.bn_prelu_3 = BNPReLU(256 + 3)
 
-        self.classifier = nn.Sequential(Conv(259, classes, 1, 1, padding=0))
+        self.classifier = nn.Sequential(ConvBN(259, classes, 1, 1, padding=0))
 
     def forward(self, input):
 

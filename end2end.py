@@ -20,7 +20,7 @@ LVL_ERROR = 10
 LVL_INFO = 5
 LVL_DEBUG = 1
 
-LOG = 1  # Will log all mesages with lvl greater than this
+LOG = 2  # Will log all mesages with lvl greater than this
 SAVE_LOG = True
 
 WRITE_TENSORBOARD = False

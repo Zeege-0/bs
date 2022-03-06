@@ -1,13 +1,19 @@
 import math
 import torch
 import torch.nn as nn
-from torch.nn import init
 from models import _conv_block, Conv2d_init, FeatureNorm, GradientMultiplyLayer
 from CFPNet import CFPEncoder
 
 
 class LizNet(nn.Module):
-    def __init__(self, device, input_width, input_height, input_channels):
+    def __init__(self, device, input_width, input_height, input_channels, classes=1):
+        """
+        :param device: device
+        :param input_width: input width
+        :param input_height: input height
+        :param input_channels: input channels
+        :param classes: number of classes
+        """
         super(LizNet, self).__init__()
         if input_width % 8 != 0 or input_height % 8 != 0:
             raise Exception(f"Input size must be divisible by 8! width={input_width}, height={input_height}")
@@ -32,7 +38,7 @@ class LizNet(nn.Module):
         self.global_max_pool_seg = nn.MaxPool2d(kernel_size=(self.input_height / 8, self.input_width / 8))
         self.global_avg_pool_seg = nn.AvgPool2d(kernel_size=(self.input_height / 8, self.input_width / 8))
 
-        self.fc = nn.Linear(in_features=66, out_features=1)
+        self.fc = nn.Linear(in_features=66, out_features=classes)
 
         self.volume_lr_multiplier_layer = GradientMultiplyLayer().apply
         self.glob_max_lr_multiplier_layer = GradientMultiplyLayer().apply
