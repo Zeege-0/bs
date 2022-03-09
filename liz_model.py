@@ -2,7 +2,7 @@ import math
 import torch
 import torch.nn as nn
 from models import _conv_block, Conv2d_init, FeatureNorm, GradientMultiplyLayer
-from CFPNet import CFPEncoder
+from CFPNet import CFPNet
 
 
 class LizNet(nn.Module):
@@ -20,11 +20,13 @@ class LizNet(nn.Module):
         self.input_width = input_width
         self.input_height = input_height
         self.input_channels = input_channels
-        self.volume = CFPEncoder(input_channels)
+        self.volume = CFPNet(input_channels, True)
 
-        self.seg_mask = nn.Sequential(
-            Conv2d_init(in_channels=257, out_channels=1, kernel_size=1, padding=0, bias=False),
-            FeatureNorm(num_features=1, eps=0.001, include_bias=False))
+        # self.seg_mask = nn.Sequential(
+        #     Conv2d_init(in_channels=257, out_channels=1, kernel_size=1, padding=0, bias=False),
+        #     FeatureNorm(num_features=1, eps=0.001, include_bias=False))
+
+        self.seg_mask = nn.MaxPool2d(kernel_size=8, stride=8)
 
         self.extractor = nn.Sequential(nn.MaxPool2d(kernel_size=2),
                                        _conv_block(in_chanels=258, out_chanels=8, kernel_size=5, padding=2),
@@ -53,8 +55,8 @@ class LizNet(nn.Module):
         self.glob_avg_lr_multiplier_mask = (torch.ones((1,)) * multiplier).to(self.device)
 
     def forward(self, input):
-        volume = self.volume(input)
-        seg_mask = self.seg_mask(volume)
+        seg_mask, volume = self.volume(input)
+        seg_mask = self.seg_mask(seg_mask)
 
         cat = torch.cat([volume, seg_mask], dim=1)
 
