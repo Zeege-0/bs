@@ -65,26 +65,6 @@ class ConvBN(nn.Module):
         return output
 
 
-class FPExtractor(nn.Module):
-    """
-    Feature Pyramid Extractor
-    """
-    def __init__(self, filters, ksize=3, stride=1, padding='same', dilation=(1, 1), groups=1, bias=False):
-        super().__init__()
-
-        self.x_1 = ConvBN(filters // 4, filters // 4, ksize=ksize, dilation=dilation, stride=stride, groups=filters // 4, groups=groups, bn_acti=True, bias=bias)
-        self.x_2 = ConvBN(filters // 4, filters // 4, ksize=ksize, dilation=dilation, stride=stride, groups=filters // 4, groups=groups, bn_acti=True, bias=bias)
-        self.x_3 = ConvBN(filters // 2, filters // 2, ksize=ksize, dilation=dilation, stride=stride, groups=filters // 2, groups=groups, bn_acti=True, bias=bias)
-
-    def forward(self, input):
-        o_1 = self.x_1(input)
-        o_2 = self.x_2(o_1)
-        o_3 = self.x_3(o_2)
-        cat = torch.cat([o_1, o_2, o_3], 1)
-        cat = nn.BatchNorm2d(cat.size(1), eps=1e-3)(cat)
-        return cat
-
-
 class CFPModule(nn.Module):
     def __init__(self, nIn, d=1, KSize=3,dkSize=3):
         super().__init__()
