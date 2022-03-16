@@ -87,7 +87,7 @@ class DownSampleBy2(nn.Module):
         super().__init__()
         self.avgpool = nn.AvgPool2d(2, stride=2)
         self.bn = nn.BatchNorm2d(in_channels, eps=1e-3)
-        self.relu = nn.PReLU(in_channels)
+        self.relu = nn.ReLU(in_channels)
 
     def forward(self, input):
         output = self.avgpool(input)
@@ -169,7 +169,7 @@ class CFPNet(nn.Module):
         # cat([deconv_2, cat_1])
         self.deconv_3 = UpSampleBy2(96 + img_channels, 32)      # upsample to 1/1
         
-        self.output = ConvBN(32, 1, ksize=1, stride=1, dilation=1, activation='Sigmoid')
+        self.output = nn.Conv2d(32, 1, 1, 1, padding='same')
 
     def forward(self, input):
         """
