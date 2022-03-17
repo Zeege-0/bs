@@ -73,7 +73,7 @@ class End2End:
 
     def training_iteration(self, data, device, model, criterion_seg, criterion_dec, optimizer, weight_loss_seg, weight_loss_dec,
                            tensorboard_writer, iter_index):
-        images, seg_masks, seg_loss_masks, is_segmented, _ = data
+        images, claz, seg_masks, seg_loss_masks, is_segmented, _ = data
 
         batch_size = self.cfg.BATCH_SIZE
         memory_fit = self.cfg.MEMORY_FIT  # Not supported yet for >1
@@ -89,10 +89,15 @@ class End2End:
         total_loss_dec = 0
 
         for sub_iter in range(num_subiters):
-            images_ = images[sub_iter * memory_fit:(sub_iter + 1) * memory_fit, :, :, :].to(device)
-            seg_masks_ = seg_masks[sub_iter * memory_fit:(sub_iter + 1) * memory_fit, :, :, :].to(device)
-            seg_loss_masks_ = seg_loss_masks[sub_iter * memory_fit:(sub_iter + 1) * memory_fit, :, :, :].to(device)
-            is_pos_ = seg_masks_.max().reshape((memory_fit, 1)).to(device)
+
+            start_idx = sub_iter * memory_fit
+            end_idx = min(batch_size, (sub_iter + 1) * memory_fit)
+
+            images_ = images[start_idx:end_idx, :, :, :].to(device)
+            seg_masks_ = seg_masks[start_idx:end_idx, :, :, :].to(device)
+            seg_loss_masks_ = seg_loss_masks[start_idx:end_idx, :, :, :].to(device)
+            is_pos_ = claz[start_idx:end_idx].to(device)
+            is_segmented_ = is_segmented[start_idx:end_idx].to(device)
 
             if tensorboard_writer is not None and iter_index % 100 == 0:
                 tensorboard_writer.add_image(f"{iter_index}/image", images_[0, :, :, :])
@@ -101,6 +106,22 @@ class End2End:
 
             decision, output_seg_mask = model(images_)
 
+            # fake label for non segmented images
+            seg_masks_[is_segmented_ == False] = 1
+            output_seg_mask[is_segmented_ == False] = torch.inf
+
+            if self.cfg.WEIGHTED_SEG_LOSS:
+                loss_seg = torch.mean(criterion_seg(output_seg_mask, seg_masks_) * seg_loss_masks_)
+            else:
+                loss_seg = criterion_seg(output_seg_mask, seg_masks_)
+            loss_dec = criterion_dec(decision, is_pos_.type_as(decision).reshape((memory_fit, 1)))
+            total_loss_seg += loss_seg.item()
+            total_loss_dec += loss_dec.item()
+
+            total_correct += ((decision.reshape((memory_fit,)) > 0.0) == is_pos_).sum().item()
+            loss = weight_loss_seg * loss_seg + weight_loss_dec * loss_dec
+
+            """
             if is_segmented[sub_iter]:
                 if self.cfg.WEIGHTED_SEG_LOSS:
                     loss_seg = torch.mean(criterion_seg(output_seg_mask, seg_masks_) * seg_loss_masks_)
@@ -119,6 +140,7 @@ class End2End:
 
                 total_correct += (decision > 0.0).item() == is_pos_.item()
                 loss = weight_loss_dec * loss_dec
+            """
             total_loss += loss.item()
 
             loss.backward()
@@ -213,7 +235,7 @@ class End2End:
         predictions, ground_truths = [], []
 
         for data_point in eval_loader:
-            image, seg_mask, seg_loss_mask, _, sample_name = data_point
+            image, claz, seg_mask, seg_loss_mask, _, sample_name = data_point
             image, seg_mask = image.to(device), seg_mask.to(device)
             is_pos = (seg_mask.max() > 0).reshape((1, 1)).to(device).item()
             prediction, pred_seg = model(image)
@@ -331,7 +353,9 @@ class End2End:
 
     def _get_loss(self, is_seg):
         reduction = "none" if self.cfg.WEIGHTED_SEG_LOSS and is_seg else "mean"
-        return nn.BCEWithLogitsLoss(reduction=reduction).to(self._get_device())
+        def my_loss(pred, target):
+            return nn.BCELoss(reduction=reduction)(torch.sigmoid(pred), target)
+        return my_loss
 
     def _get_device(self):
         return f"cuda:{self.cfg.GPU}"

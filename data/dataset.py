@@ -25,7 +25,7 @@ class Dataset(torch.utils.data.Dataset):
 
         self.neg_retrieval_freq = np.zeros(shape=self.num_neg)
 
-    def __getitem__(self, index) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool, str]:
+    def __getitem__(self, index) -> Tuple[torch.Tensor, int, torch.Tensor, torch.Tensor, bool, str]:
 
         if self.counter >= self.len:
             self.counter = 0
@@ -49,18 +49,22 @@ class Dataset(torch.utils.data.Dataset):
                 ix = index % self.num_pos
                 ix = self.neg_imgs_permutation[ix]
                 item = self.neg_samples[ix]
+                claz = 0.
                 self.neg_retrieval_freq[ix] = self.neg_retrieval_freq[ix] + 1
 
             else:
                 ix = index
                 item = self.pos_samples[ix]
+                claz = 1.
         else:
             if index < self.num_neg:
                 ix = index
                 item = self.neg_samples[ix]
+                claz = 0.
             else:
                 ix = index - self.num_neg
                 item = self.pos_samples[ix]
+                claz = 1.
 
         image, seg_mask, seg_loss_mask, is_segmented, image_path, seg_mask_path, sample_name = item
 
@@ -86,7 +90,7 @@ class Dataset(torch.utils.data.Dataset):
 
         self.counter = self.counter + 1
 
-        return image, seg_mask, seg_loss_mask, is_segmented, sample_name
+        return image, claz, seg_mask, seg_loss_mask, is_segmented, sample_name
 
     def __len__(self):
         return self.len

@@ -54,8 +54,8 @@ class LizNet(nn.Module):
         self.glob_max_lr_multiplier_mask = (torch.ones((1,)) * multiplier).to(self.device)
         self.glob_avg_lr_multiplier_mask = (torch.ones((1,)) * multiplier).to(self.device)
 
-    def forward(self, input):
-        seg_mask, volume = self.volume(input)
+    def forward(self, x):
+        seg_mask, volume = self.volume(x)
         seg_mask = self.seg_mask(seg_mask)
 
         cat = torch.cat([volume, seg_mask], dim=1)
