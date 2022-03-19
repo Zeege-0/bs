@@ -2,6 +2,7 @@ class Config:
 
     MY = None
     RESIZE_INPUT = None
+    USE_MED = None
 
     GPU = None
 
@@ -100,6 +101,7 @@ class Config:
     def merge_from_args(self, args):
         self.MY = args.MY
         self.RESIZE_INPUT = args.RESIZE_INPUT
+        self.USE_MED = args.USE_MED
         self.GPU = args.GPU
         self.RUN_NAME = args.RUN_NAME
         self.DATASET = args.DATASET
@@ -133,6 +135,7 @@ class Config:
         params = {
             "MY": self.MY,
             "RESIZE_INPUT": self.RESIZE_INPUT,
+            "USE_MED": self.USE_MED,
             "GPU": self.GPU,
             "DATASET": self.DATASET,
             "DATASET_PATH": self.DATASET_PATH,
@@ -171,6 +174,7 @@ def load_from_dict(dictionary):
 
     cfg.MY = dictionary.get("MY", None)
     cfg.RESIZE_INPUT = dictionary.get("RESIZE_INPUT", None)
+    cfg.USE_MED = dictionary.get("USE_MED", None)
     cfg.GPU = dictionary.get("GPU", None)
     cfg.DATASET = dictionary.get("DATASET", None)
     cfg.DATASET_PATH = dictionary.get("DATASET_PATH", None)

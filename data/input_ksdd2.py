@@ -1,3 +1,4 @@
+from black import main
 import numpy as np
 import pickle
 import os
@@ -54,3 +55,4 @@ class KSDD2Dataset(Dataset):
         self.len = 2 * len(pos_samples) if self.kind in ['TRAIN'] else len(pos_samples) + len(neg_samples)
 
         self.init_extra()
+

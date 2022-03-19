@@ -108,7 +108,7 @@ class Dataset(torch.utils.data.Dataset):
         lbl = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
         if dilate is not None and dilate > 1:
             lbl = cv2.dilate(lbl, np.ones((dilate, dilate)))
-        if self.cfg.RESIZE_INPUT and resize_dim is not None:
+        if resize_dim is not None:
             lbl = cv2.resize(lbl, dsize=resize_dim)
         return np.array((lbl / 255.0), dtype=np.float32), np.max(lbl) > 0
 

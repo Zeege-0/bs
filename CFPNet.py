@@ -111,7 +111,7 @@ class UpSampleBy2(nn.Module):
         return output
 
 
-class CFPNet(nn.Module):
+class CFPNetMed(nn.Module):
     def __init__(self, img_channels, return_features=False):
         """
         :param img_channels: number of channels in the input image

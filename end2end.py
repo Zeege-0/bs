@@ -107,8 +107,9 @@ class End2End:
             decision, output_seg_mask = model(images_)
 
             # fake label for non segmented images
-            seg_masks_[is_segmented_ == False] = 1
-            output_seg_mask[is_segmented_ == False] = torch.inf
+            non_segmented_mask = ((is_segmented_ == False) & is_pos_.type(torch.bool))
+            seg_masks_[non_segmented_mask] = 1
+            output_seg_mask[non_segmented_mask] = torch.inf
 
             if self.cfg.WEIGHTED_SEG_LOSS:
                 loss_seg = torch.mean(criterion_seg(output_seg_mask, seg_masks_) * seg_loss_masks_)
@@ -121,26 +122,6 @@ class End2End:
             total_correct += ((decision.reshape((memory_fit,)) > 0.0) == is_pos_).sum().item()
             loss = weight_loss_seg * loss_seg + weight_loss_dec * loss_dec
 
-            """
-            if is_segmented[sub_iter]:
-                if self.cfg.WEIGHTED_SEG_LOSS:
-                    loss_seg = torch.mean(criterion_seg(output_seg_mask, seg_masks_) * seg_loss_masks_)
-                else:
-                    loss_seg = criterion_seg(output_seg_mask, seg_masks_)
-                loss_dec = criterion_dec(decision, is_pos_)
-
-                total_loss_seg += loss_seg.item()
-                total_loss_dec += loss_dec.item()
-
-                total_correct += (decision > 0.0).item() == is_pos_.item()
-                loss = weight_loss_seg * loss_seg + weight_loss_dec * loss_dec
-            else:
-                loss_dec = criterion_dec(decision, is_pos_)
-                total_loss_dec += loss_dec.item()
-
-                total_correct += (decision > 0.0).item() == is_pos_.item()
-                loss = weight_loss_dec * loss_dec
-            """
             total_loss += loss.item()
 
             loss.backward()
@@ -381,7 +362,7 @@ class End2End:
 
     def _get_model(self):
         if self.cfg.MY:
-            seg_net = LizNet(self._get_device(), self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT, self.cfg.INPUT_CHANNELS)
+            seg_net = LizNet(self.cfg.USE_MED, self._get_device(), self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT, self.cfg.INPUT_CHANNELS)
         else:
             seg_net = SegDecNet(self._get_device(), self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT, self.cfg.INPUT_CHANNELS)
         return seg_net
