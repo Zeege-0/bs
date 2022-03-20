@@ -13,6 +13,7 @@ def parse_args():
     parser.add_argument('--MY', type=str2bool, required=True, help='Whether to use MY model')
     parser.add_argument('--RESIZE_INPUT', type=str2bool, required=True, help='Whether to resize input')
     parser.add_argument('--USE_MED', type=str2bool, required=True, help='Whether to use CFP-Med')
+    parser.add_argument('--USE_SAM', type=str2bool, required=True, help='Whether to use SAM')
 
     parser.add_argument('--GPU', type=int, required=True, help="ID of GPU used for training/evaluation.")
     parser.add_argument('--RUN_NAME', type=str, required=True, help="Name of the run, used as directory name for storing results.")

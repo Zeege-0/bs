@@ -3,6 +3,7 @@ class Config:
     MY = None
     RESIZE_INPUT = None
     USE_MED = None
+    USE_SAM = None
 
     GPU = None
 
@@ -102,6 +103,7 @@ class Config:
         self.MY = args.MY
         self.RESIZE_INPUT = args.RESIZE_INPUT
         self.USE_MED = args.USE_MED
+        self.USE_SAM = args.USE_SAM
         self.GPU = args.GPU
         self.RUN_NAME = args.RUN_NAME
         self.DATASET = args.DATASET
@@ -136,6 +138,7 @@ class Config:
             "MY": self.MY,
             "RESIZE_INPUT": self.RESIZE_INPUT,
             "USE_MED": self.USE_MED,
+            "USE_SAM": self.USE_SAM,
             "GPU": self.GPU,
             "DATASET": self.DATASET,
             "DATASET_PATH": self.DATASET_PATH,
@@ -175,6 +178,7 @@ def load_from_dict(dictionary):
     cfg.MY = dictionary.get("MY", None)
     cfg.RESIZE_INPUT = dictionary.get("RESIZE_INPUT", None)
     cfg.USE_MED = dictionary.get("USE_MED", None)
+    cfg.USE_SAM = dictionary.get("USE_SAM", None)
     cfg.GPU = dictionary.get("GPU", None)
     cfg.DATASET = dictionary.get("DATASET", None)
     cfg.DATASET_PATH = dictionary.get("DATASET_PATH", None)

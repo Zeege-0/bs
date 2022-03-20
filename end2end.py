@@ -77,8 +77,7 @@ class End2End:
         images, claz, seg_masks, seg_loss_masks, is_segmented, _ = data
 
         batch_size = self.cfg.BATCH_SIZE
-        memory_fit = self.cfg.MEMORY_FIT  # Not supported yet for >1
-
+        memory_fit = batch_size
         num_subiters = int(batch_size / memory_fit)
 
         total_loss = 0
@@ -86,12 +85,8 @@ class End2End:
         total_loss_seg = 0
         total_loss_dec = 0
 
-        # optimizer.zero_grad()
-
-        loss_function = None
-
         # Start loss function
-        def loss_function_closure(is_first_step, idx):
+        def loss_function(is_first_step, idx):
             start_idx = idx * memory_fit
             end_idx = min(batch_size, (idx + 1) * memory_fit)
 
@@ -131,9 +126,10 @@ class End2End:
             return loss
         # End loss function
 
-        for sub_iter in range(num_subiters):
+        if not self.cfg.USE_SAM:
+            optimizer.zero_grad()
 
-            loss_function = loss_function_closure
+        for sub_iter in range(num_subiters):
             loss, tl, tc, tls, tld = loss_function(True, sub_iter)
             total_loss += tl
             total_correct += tc
@@ -142,12 +138,13 @@ class End2End:
             loss.backward()
 
         # Backward and optimize
-        # optimizer.step()
-        # optimizer.zero_grad()
-
-        optimizer.first_step(zero_grad=True)
-        loss_function(False, 0).backward()
-        optimizer.second_step(zero_grad=True)
+        if not self.cfg.USE_SAM:
+            optimizer.step()
+            optimizer.zero_grad()
+        else:
+            optimizer.first_step(zero_grad=True)
+            loss_function(False, 0).backward()
+            optimizer.second_step(zero_grad=True)
 
         return total_loss_seg, total_loss_dec, total_loss, total_correct
 
@@ -354,10 +351,9 @@ class End2End:
 
     def _get_loss(self, is_seg):
         reduction = "none" if self.cfg.WEIGHTED_SEG_LOSS and is_seg else "mean"
-        return torch.nn.BCEWithLogitsLoss(reduction=reduction)
-        # def my_loss(pred, target):
-        #     return nn.BCELoss(reduction=reduction)(torch.sigmoid(pred), target)
-        # return my_loss
+        def my_loss(pred, target):
+            return nn.BCELoss(reduction=reduction)(torch.sigmoid(pred), target)
+        return my_loss
 
     def _get_device(self):
         return f"cuda:{self.cfg.GPU}"

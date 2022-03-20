@@ -70,14 +70,14 @@ class SegDecNet(nn.Module):
                                     _conv_block(64, 64, 5, 2),
                                     _conv_block(64, 64, 5, 2),
                                     nn.MaxPool2d(2),
-                                    _conv_block(64, 512, 15, 7))
+                                    _conv_block(64, 256, 15, 7))
 
         self.seg_mask = nn.Sequential(
-            Conv2d_init(in_channels=512, out_channels=1, kernel_size=1, padding=0, bias=False),
+            Conv2d_init(in_channels=256, out_channels=1, kernel_size=1, padding=0, bias=False),
             FeatureNorm(num_features=1, eps=0.001, include_bias=False))
 
         self.extractor = nn.Sequential(nn.MaxPool2d(kernel_size=2),
-                                       _conv_block(in_chanels=513, out_chanels=8, kernel_size=5, padding=2),
+                                       _conv_block(in_chanels=257, out_chanels=8, kernel_size=5, padding=2),
                                        nn.MaxPool2d(kernel_size=2),
                                        _conv_block(in_chanels=8, out_chanels=16, kernel_size=5, padding=2),
                                        nn.MaxPool2d(kernel_size=2),
