@@ -88,47 +88,57 @@ class End2End:
         total_loss_seg = 0
         total_loss_dec = 0
 
+        loss_seg, loss_dec, decision, loss_function = None, None, None, None
+
         for sub_iter in range(num_subiters):
 
-            start_idx = sub_iter * memory_fit
-            end_idx = min(batch_size, (sub_iter + 1) * memory_fit)
+            # Start loss function
+            def loss_function_closure():
+                start_idx = sub_iter * memory_fit
+                end_idx = min(batch_size, (sub_iter + 1) * memory_fit)
 
-            images_ = images[start_idx:end_idx, :, :, :].to(device)
-            seg_masks_ = seg_masks[start_idx:end_idx, :, :, :].to(device)
-            seg_loss_masks_ = seg_loss_masks[start_idx:end_idx, :, :, :].to(device)
-            is_pos_ = claz[start_idx:end_idx].to(device)
-            is_segmented_ = is_segmented[start_idx:end_idx].to(device)
+                images_ = images[start_idx:end_idx, :, :, :].to(device)
+                seg_masks_ = seg_masks[start_idx:end_idx, :, :, :].to(device)
+                seg_loss_masks_ = seg_loss_masks[start_idx:end_idx, :, :, :].to(device)
+                is_pos_ = claz[start_idx:end_idx].to(device)
+                is_segmented_ = is_segmented[start_idx:end_idx].to(device)
 
-            if tensorboard_writer is not None and iter_index % 100 == 0:
-                tensorboard_writer.add_image(f"{iter_index}/image", images_[0, :, :, :])
-                tensorboard_writer.add_image(f"{iter_index}/seg_mask", seg_masks[0, :, :, :])
-                tensorboard_writer.add_image(f"{iter_index}/seg_loss_mask", seg_loss_masks_[0, :, :, :])
+                if tensorboard_writer is not None and iter_index % 100 == 0:
+                    tensorboard_writer.add_image(f"{iter_index}/image", images_[0, :, :, :])
+                    tensorboard_writer.add_image(f"{iter_index}/seg_mask", seg_masks[0, :, :, :])
+                    tensorboard_writer.add_image(f"{iter_index}/seg_loss_mask", seg_loss_masks_[0, :, :, :])
 
-            decision, output_seg_mask = model(images_)
+                decision, output_seg_mask = model(images_)
 
-            # fake label for non segmented images
-            non_segmented_mask = ((is_segmented_ == False) & is_pos_.type(torch.bool))
-            seg_masks_[non_segmented_mask] = 1
-            output_seg_mask[non_segmented_mask] = torch.inf
+                # fake label for non segmented images
+                non_segmented_mask = ((is_segmented_ == False) & is_pos_.type(torch.bool))
+                seg_masks_[non_segmented_mask] = 1
+                output_seg_mask[non_segmented_mask] = torch.inf
 
-            if self.cfg.WEIGHTED_SEG_LOSS:
-                loss_seg = torch.mean(criterion_seg(output_seg_mask, seg_masks_) * seg_loss_masks_)
-            else:
-                loss_seg = criterion_seg(output_seg_mask, seg_masks_)
-            loss_dec = criterion_dec(decision, is_pos_.type_as(decision).reshape((memory_fit, 1)))
+                if self.cfg.WEIGHTED_SEG_LOSS:
+                    loss_seg = torch.mean(criterion_seg(output_seg_mask, seg_masks_) * seg_loss_masks_)
+                else:
+                    loss_seg = criterion_seg(output_seg_mask, seg_masks_)
+                loss_dec = criterion_dec(decision, is_pos_.type_as(decision).reshape((memory_fit, 1)))
+                loss = weight_loss_seg * loss_seg + weight_loss_dec * loss_dec
+                return loss
+            # End loss function
+            loss_function = loss_function_closure
+            
+            loss = loss_function()
+            loss.backward()
             total_loss_seg += loss_seg.item()
             total_loss_dec += loss_dec.item()
-
             total_correct += ((decision.reshape((memory_fit,)) > 0.0) == is_pos_).sum().item()
-            loss = weight_loss_seg * loss_seg + weight_loss_dec * loss_dec
-
             total_loss += loss.item()
 
-            loss.backward()
-
         # Backward and optimize
-        optimizer.step()
-        optimizer.zero_grad()
+        # optimizer.step()
+        # optimizer.zero_grad()
+
+        optimizer.first_step(zero_grad=True)
+        loss_function().backward()
+        optimizer.second_step(zero_grad=True)
 
         return total_loss_seg, total_loss_dec, total_loss, total_correct
 
@@ -334,9 +344,10 @@ class End2End:
 
     def _get_loss(self, is_seg):
         reduction = "none" if self.cfg.WEIGHTED_SEG_LOSS and is_seg else "mean"
-        def my_loss(pred, target):
-            return nn.BCELoss(reduction=reduction)(torch.sigmoid(pred), target)
-        return my_loss
+        return torch.nn.BCEWithLogitsLoss(reduction=reduction)
+        # def my_loss(pred, target):
+        #     return nn.BCELoss(reduction=reduction)(torch.sigmoid(pred), target)
+        # return my_loss
 
     def _get_device(self):
         return f"cuda:{self.cfg.GPU}"
