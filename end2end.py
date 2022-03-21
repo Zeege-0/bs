@@ -15,7 +15,7 @@ import random
 import cv2
 from config import Config
 from torch.utils.tensorboard import SummaryWriter
-from sam import SAM
+from sam import SAM, enable_running_stats, disable_running_stats
 
 LVL_ERROR = 10
 LVL_INFO = 5
@@ -78,7 +78,6 @@ class End2End:
 
         batch_size = self.cfg.BATCH_SIZE
         memory_fit = batch_size
-        num_subiters = int(batch_size / memory_fit)
 
         total_loss = 0
         total_correct = 0
@@ -128,14 +127,16 @@ class End2End:
 
         if not self.cfg.USE_SAM:
             optimizer.zero_grad()
-
-        for sub_iter in range(num_subiters):
-            loss, tl, tc, tls, tld = loss_function(True, sub_iter)
-            total_loss += tl
-            total_correct += tc
-            total_loss_seg += tls
-            total_loss_dec += tld
-            loss.backward()
+        else:
+             enable_running_stats()
+             
+        # First pass
+        loss, tl, tc, tls, tld = loss_function(True, 0)
+        total_loss += tl
+        total_correct += tc
+        total_loss_seg += tls
+        total_loss_dec += tld
+        loss.backward()
 
         # Backward and optimize
         if not self.cfg.USE_SAM:
@@ -143,6 +144,7 @@ class End2End:
             optimizer.zero_grad()
         else:
             optimizer.first_step(zero_grad=True)
+            disable_running_stats()
             loss_function(False, 0).backward()
             optimizer.second_step(zero_grad=True)
 
@@ -346,8 +348,11 @@ class End2End:
         torch.save(model.state_dict(), output_name)
 
     def _get_optimizer(self, model):
-        base_optimizer = torch.optim.SGD
-        return SAM(model.parameters(), base_optimizer, lr=self.cfg.LEARNING_RATE, momentum=0.9)
+        if self.cfg.USE_SAM:
+            base_optimizer = torch.optim.SGD
+            return SAM(model.parameters(), base_optimizer, lr=self.cfg.LEARNING_RATE, momentum=0.9)
+        else:
+            return torch.optim.SGD(model.parameters(), self.cfg.LEARNING_RATE)
 
     def _get_loss(self, is_seg):
         reduction = "none" if self.cfg.WEIGHTED_SEG_LOSS and is_seg else "mean"

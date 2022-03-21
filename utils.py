@@ -74,8 +74,13 @@ def plot_sample(image_name, image, segmentation, label, save_dir, decision=None,
 
     out_prefix = '{:.3f}_'.format(decision) if decision is not None else ''
 
-    plt.savefig(f"{save_dir}/{out_prefix}result_{image_name}.jpg", bbox_inches='tight', dpi=300)
-    plt.close()
+    try:
+        plt.savefig(f"{save_dir}/{out_prefix}result_{image_name}.jpg", bbox_inches='tight', dpi=300)
+        plt.close()
+    except Exception as e:
+        os.mkdir(save_dir)
+        plt.savefig(f"{save_dir}/{out_prefix}result_{image_name}.jpg", bbox_inches='tight', dpi=300)
+        plt.close()
 
     if plot_seg:
         jet_seg = cv2.applyColorMap((segmentation * 255).astype(np.uint8), cv2.COLORMAP_JET)
