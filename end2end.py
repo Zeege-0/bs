@@ -128,8 +128,8 @@ class End2End:
         if not self.cfg.USE_SAM:
             optimizer.zero_grad()
         else:
-             enable_running_stats()
-             
+             enable_running_stats(model)
+
         # First pass
         loss, tl, tc, tls, tld = loss_function(True, 0)
         total_loss += tl
@@ -144,7 +144,7 @@ class End2End:
             optimizer.zero_grad()
         else:
             optimizer.first_step(zero_grad=True)
-            disable_running_stats()
+            disable_running_stats(model)
             loss_function(False, 0).backward()
             optimizer.second_step(zero_grad=True)
 
@@ -212,8 +212,8 @@ class End2End:
                 tensorboard_writer.add_scalar("Accuracy/Train/", epoch_correct / samples_per_epoch, epoch)
 
             if self.cfg.VALIDATE and (epoch % validation_step == 0 or epoch == num_epochs - 1):
-                validation_ap, validation_accuracy = self.eval_model(device, model, validation_set, None, False, True, False)
-                validation_data.append((validation_ap, epoch))
+                validation_ap, validation_accuracy, f1, FP, FN, TP, TN = self.eval_model(device, model, validation_set, None, False, True, False)
+                validation_data.append((validation_ap, epoch, f1, FP, FN, TP, TN))
 
                 if validation_ap > max_validation:
                     max_validation = validation_ap
@@ -267,7 +267,7 @@ class End2End:
             self._log(f"VALIDATION || AUC={metrics['AUC']:f}, and AP={metrics['AP']:f}, with best thr={metrics['best_thr']:f} "
                       f"at f-measure={metrics['best_f_measure']:.3f} and FP={FP:d}, FN={FN:d}, TOTAL SAMPLES={FP + FN + TP + TN:d}")
 
-            return metrics["AP"], metrics["accuracy"]
+            return metrics["AP"], metrics["accuracy"], metrics["best_f_measure"], FP, FN, TP, TN
         else:
             utils.evaluate_metrics(res, self.run_path, self.run_name)
 
@@ -299,11 +299,11 @@ class End2End:
     def reload_model(self, model, load_final=False):
         if self.cfg.USE_BEST_MODEL:
             path = os.path.join(self.model_path, "best_state_dict.pth")
-            model.load_state_dict(torch.load(path))
+            model.load_state_dict(torch.load(path).state_dict())
             self._log(f"Loading model state from {path}")
         elif load_final:
             path = os.path.join(self.model_path, "final_state_dict.pth")
-            model.load_state_dict(torch.load(path))
+            model.load_state_dict(torch.load(path).state_dict())
             self._log(f"Loading model state from {path}")
         else:
             self._log("Keeping same model state")
@@ -324,20 +324,18 @@ class End2End:
         plt.ylim(bottom=0)
         plt.grid()
         plt.xlabel("Epochs")
-        if self.cfg.VALIDATE:
-            v, ve = map(list, zip(*validation_data))
-            plt.twinx()
-            plt.plot(ve, v, label="Validation AP", color="Green")
-            plt.ylim((0, 1))
+        v, ve, f1, FP, FN, TP, TN = map(list, zip(*validation_data))
+        plt.twinx()
+        plt.plot(ve, v, label="Validation AP", color="Green")
+        plt.plot(ve, f1, label="Validation F1", color="Blue")
+        plt.ylim((0, 1))
         plt.legend()
         plt.savefig(os.path.join(self.run_path, "loss_val"), dpi=200)
 
-        df_loss = pd.DataFrame(data={"loss_seg": ls, "loss_dec": ld, "loss": l, "epoch": le})
+        df_loss = pd.DataFrame(data={"epoch": le, "loss_seg": ls, "loss_dec": ld, "loss": l})
         df_loss.to_csv(os.path.join(self.run_path, "losses.csv"), index=False)
-
-        if self.cfg.VALIDATE:
-            df_loss = pd.DataFrame(data={"validation_data": ls, "loss_dec": ld, "loss": l, "epoch": le})
-            df_loss.to_csv(os.path.join(self.run_path, "losses.csv"), index=False)
+        df_val = pd.DataFrame(data={"AP": v, "F1": f1, "FP": FP, "FN": FN, "TP": TP, "TN": TN})
+        df_val.to_csv(os.path.join(self.run_path, "validation.csv"), index=False)
 
     def _save_model(self, model, name="final_state_dict.pth"):
         output_name = os.path.join(self.model_path, name)
@@ -345,7 +343,7 @@ class End2End:
         if os.path.exists(output_name):
             os.remove(output_name)
 
-        torch.save(model.state_dict(), output_name)
+        torch.save(model, output_name)
 
     def _get_optimizer(self, model):
         if self.cfg.USE_SAM:

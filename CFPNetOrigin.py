@@ -241,7 +241,7 @@ class CFPEncoder(nn.Module):
         self.down_3 = InputInjection(3)  # down-sample the image 3 times
 
         self.bn_prelu_1 = BNPReLU(32 + img_channels)
-        dilation_block_1 =[2,2]
+        dilation_block_1 =[1, 3]
         # CFP Block 1
         self.downsample_1 = DownSamplingBlock(32 + img_channels, 64)
         self.CFP_Block_1 = nn.Sequential()
@@ -251,7 +251,7 @@ class CFPEncoder(nn.Module):
         self.bn_prelu_2 = BNPReLU(128 + img_channels)
 
         # CFP Block 2
-        dilation_block_2 = [4, 4, 8, 8, 16, 16] #camvid #cityscapes [4,4,8,8,16,16] # [4,8,16]
+        dilation_block_2 = [4, 4, 8, 16] #camvid #cityscapes [4,4,8,8,16,16] # [4,8,16]
         self.downsample_2 = DownSamplingBlock(128 + img_channels, 128)
         self.CFP_Block_2 = nn.Sequential()
         for i in range(0, block_2):

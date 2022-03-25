@@ -2,6 +2,7 @@ import math
 import torch
 import torch.nn as nn
 from torch.nn import init
+from CFPNetOrigin import CFPEncoder
 
 BATCHNORM_TRACK_RUNNING_STATS = False
 BATCHNORM_MOVING_AVERAGE_DECAY = 0.9997
@@ -52,13 +53,14 @@ class FeatureNorm(nn.Module):
 
 
 class SegDecNet(nn.Module):
-    def __init__(self, device, input_width, input_height, input_channels, classes=1):
+    def __init__(self, device, input_width, input_height, input_channels, classes=1, use_hybrid=True):
         super(SegDecNet, self).__init__()
         if input_width % 8 != 0 or input_height % 8 != 0:
             raise Exception(f"Input size must be divisible by 8! width={input_width}, height={input_height}")
         self.input_width = input_width
         self.input_height = input_height
         self.input_channels = input_channels
+        self.use_hybrid = use_hybrid
         self.volume = nn.Sequential(_conv_block(self.input_channels, 32, 5, 2),
                                     nn.MaxPool2d(2),
                                     _conv_block(32, 64, 5, 2),
@@ -71,9 +73,14 @@ class SegDecNet(nn.Module):
                                     _conv_block(64, 64, 5, 2),
                                     nn.MaxPool2d(2),
                                     _conv_block(64, 256, 15, 7))
+        
+        seg_mask_channels = 256 + input_channels
+        if use_hybrid:
+            self.cfp = CFPEncoder(input_channels, block_2=2)
+            seg_mask_channels = 512 + input_channels
 
         self.seg_mask = nn.Sequential(
-            Conv2d_init(in_channels=256, out_channels=1, kernel_size=1, padding=0, bias=False),
+            Conv2d_init(in_channels=seg_mask_channels, out_channels=1, kernel_size=1, padding=0, bias=False),
             FeatureNorm(num_features=1, eps=0.001, include_bias=False))
 
         self.extractor = nn.Sequential(nn.MaxPool2d(kernel_size=2),
@@ -102,9 +109,13 @@ class SegDecNet(nn.Module):
         self.glob_max_lr_multiplier_mask = (torch.ones((1,)) * multiplier).to(self.device)
         self.glob_avg_lr_multiplier_mask = (torch.ones((1,)) * multiplier).to(self.device)
 
-    def forward(self, input):
-        volume = self.volume(input)
-        seg_mask = self.seg_mask(volume)
+    def forward(self, x):
+        volume = self.volume(x)
+        if self.use_hybrid:
+            cfp = self.cfp(x)
+            seg_mask = self.seg_mask(torch.cat([volume, cfp], dim=1))
+        else:
+            seg_mask = self.seg_mask(volume)
 
         cat = torch.cat([volume, seg_mask], dim=1)
 

@@ -4,6 +4,7 @@ class Config:
     RESIZE_INPUT = None
     USE_MED = None
     USE_SAM = None
+    USE_HYBRID = None
 
     GPU = None
 
@@ -104,6 +105,7 @@ class Config:
         self.RESIZE_INPUT = args.RESIZE_INPUT
         self.USE_MED = args.USE_MED
         self.USE_SAM = args.USE_SAM
+        self.USE_HYBRID = args.USE_HYBRID
         self.GPU = args.GPU
         self.RUN_NAME = args.RUN_NAME
         self.DATASET = args.DATASET
@@ -139,6 +141,7 @@ class Config:
             "RESIZE_INPUT": self.RESIZE_INPUT,
             "USE_MED": self.USE_MED,
             "USE_SAM": self.USE_SAM,
+            "USE_HYBRID": self.USE_HYBRID,
             "GPU": self.GPU,
             "DATASET": self.DATASET,
             "DATASET_PATH": self.DATASET_PATH,
@@ -179,6 +182,7 @@ def load_from_dict(dictionary):
     cfg.RESIZE_INPUT = dictionary.get("RESIZE_INPUT", None)
     cfg.USE_MED = dictionary.get("USE_MED", None)
     cfg.USE_SAM = dictionary.get("USE_SAM", None)
+    cfg.USE_HYBRID = dictionary.get("USE_HYBRID", None)
     cfg.GPU = dictionary.get("GPU", None)
     cfg.DATASET = dictionary.get("DATASET", None)
     cfg.DATASET_PATH = dictionary.get("DATASET_PATH", None)
