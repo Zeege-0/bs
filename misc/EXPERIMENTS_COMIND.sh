@@ -8,6 +8,7 @@ run_COMIND_EXPERIMENTS()
     SAVE_IMAGES=$1; shift
     GPUS=($@)
 
+    train_single $SAVE_IMAGES STEEL $STEEL_PATH ALL_300_N_0     $RESULTS_PATH 1 300  150    90 0.1 0.1 10 True  2 1 False True  True  ${GPUS[0]} # Figure 12
     train_single $SAVE_IMAGES KSDD2 $KSDD2_PATH N_53  $RESULTS_PATH 15 -1 53  50 0.01 1 1 True  2 3 True  True  True  ${GPUS[0]} # Figure 9
     return
 

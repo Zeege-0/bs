@@ -74,7 +74,7 @@ class SegDecNet(nn.Module):
                                     nn.MaxPool2d(2),
                                     _conv_block(64, 256, 15, 7))
         
-        seg_mask_channels = 256 + input_channels
+        seg_mask_channels = 256
         if use_hybrid:
             self.cfp = CFPEncoder(input_channels, block_2=2)
             seg_mask_channels = 512 + input_channels

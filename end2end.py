@@ -176,6 +176,7 @@ class End2End:
             from timeit import default_timer as timer
 
             time_acc = 0
+            time_misc = 0
             start = timer()
             for iter_index, (data) in enumerate(train_loader):
                 start_1 = timer()
@@ -384,7 +385,7 @@ class End2End:
         if self.cfg.MY:
             seg_net = LizNet(self.cfg.USE_MED, self._get_device(), self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT, self.cfg.INPUT_CHANNELS)
         else:
-            seg_net = SegDecNet(self._get_device(), self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT, self.cfg.INPUT_CHANNELS)
+            seg_net = SegDecNet(self._get_device(), self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT, self.cfg.INPUT_CHANNELS, use_hybrid=self.cfg.USE_HYBRID)
         return seg_net
 
     def print_run_params(self):

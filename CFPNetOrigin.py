@@ -231,7 +231,7 @@ class CFPEncoder(nn.Module):
     def __init__(self, img_channels, block_1=2, block_2=6):
         super().__init__()
         self.init_conv = nn.Sequential(
-            Conv(3, 32, 3, 2, padding=1, bn_acti=True),
+            Conv(img_channels, 32, 3, 2, padding=1, bn_acti=True),
             Conv(32, 32, 3, 1, padding=1, bn_acti=True),
             Conv(32, 32, 3, 1, padding=1, bn_acti=True),
         )
@@ -251,7 +251,7 @@ class CFPEncoder(nn.Module):
         self.bn_prelu_2 = BNPReLU(128 + img_channels)
 
         # CFP Block 2
-        dilation_block_2 = [4, 4, 8, 16] #camvid #cityscapes [4,4,8,8,16,16] # [4,8,16]
+        dilation_block_2 = [4, 4, 8, 8, 16, 16] #camvid #cityscapes [4,4,8,8,16,16] # [4,8,16]
         self.downsample_2 = DownSamplingBlock(128 + img_channels, 128)
         self.CFP_Block_2 = nn.Sequential()
         for i in range(0, block_2):
