@@ -72,6 +72,34 @@ class End2End:
         test_loader = get_dataset("TEST", self.cfg)
         self.eval_model(device, model, test_loader, save_folder=self.outputs_path, save_images=save_images, is_validation=False, plot_seg=plot_seg)
 
+    @staticmethod
+    def distributed_loss_func(decision, output_seg_mask, batch_size, is_first_step, criterion_seg, criterion_dec, 
+                              weight_loss_seg, weight_loss_dec, seg_masks, claz, is_segmented, use_weighted_seg_loss=False, 
+                              seg_loss_masks=None):
+
+        # fake label for non segmented images
+        non_segmented_mask = ((is_segmented == False) & claz.type(torch.bool))
+        seg_masks[non_segmented_mask] = 1
+        output_seg_mask[non_segmented_mask] = torch.inf
+
+        if use_weighted_seg_loss:
+            loss_seg = torch.mean(criterion_seg(output_seg_mask, seg_masks) * seg_loss_masks)
+        else:
+            loss_seg = criterion_seg(output_seg_mask, seg_masks)
+
+        loss_dec = criterion_dec(decision, claz.type_as(decision).reshape((batch_size, 1)))
+        loss = weight_loss_seg * loss_seg + weight_loss_dec * loss_dec
+
+        if is_first_step:
+            _total_loss_seg = loss_seg.item()
+            _total_loss_dec = loss_dec.item()
+            _total_correct = ((decision.reshape((batch_size,)) > 0.0) == claz).sum().item()
+            _total_loss = loss.item()
+            return loss, _total_loss, _total_correct, _total_loss_seg, _total_loss_dec
+        
+        return loss
+
+
     def training_iteration(self, data, device, model, criterion_seg, criterion_dec, optimizer, weight_loss_seg, weight_loss_dec,
                            tensorboard_writer, iter_index):
         images, claz, seg_masks, seg_loss_masks, is_segmented, _ = data
@@ -85,44 +113,20 @@ class End2End:
         total_loss_dec = 0
 
         # Start loss function
-        def loss_function(is_first_step, idx):
-            start_idx = idx * memory_fit
-            end_idx = min(batch_size, (idx + 1) * memory_fit)
-
-            images_ = images[start_idx:end_idx, :, :, :].to(device)
-            seg_masks_ = seg_masks[start_idx:end_idx, :, :, :].to(device)
-            seg_loss_masks_ = seg_loss_masks[start_idx:end_idx, :, :, :].to(device)
-            is_pos_ = claz[start_idx:end_idx].to(device)
-            is_segmented_ = is_segmented[start_idx:end_idx].to(device)
-
-            if tensorboard_writer is not None and iter_index % 100 == 0:
-                tensorboard_writer.add_image(f"{iter_index}/image", images_[0, :, :, :])
-                tensorboard_writer.add_image(f"{iter_index}/seg_mask", seg_masks[0, :, :, :])
-                tensorboard_writer.add_image(f"{iter_index}/seg_loss_mask", seg_loss_masks_[0, :, :, :])
-
-            decision, output_seg_mask = model(images_)
-
-            # fake label for non segmented images
-            non_segmented_mask = ((is_segmented_ == False) & is_pos_.type(torch.bool))
-            seg_masks_[non_segmented_mask] = 1
-            output_seg_mask[non_segmented_mask] = torch.inf
-
-            if self.cfg.WEIGHTED_SEG_LOSS:
-                loss_seg = torch.mean(criterion_seg(output_seg_mask, seg_masks_) * seg_loss_masks_)
-            else:
-                loss_seg = criterion_seg(output_seg_mask, seg_masks_)
-
-            loss_dec = criterion_dec(decision, is_pos_.type_as(decision).reshape((memory_fit, 1)))
-            loss = weight_loss_seg * loss_seg + weight_loss_dec * loss_dec
-
-            if is_first_step:
-                _total_loss_seg = loss_seg.item()
-                _total_loss_dec = loss_dec.item()
-                _total_correct = ((decision.reshape((memory_fit,)) > 0.0) == is_pos_).sum().item()
-                _total_loss = loss.item()
-                return loss, _total_loss, _total_correct, _total_loss_seg, _total_loss_dec
-            
-            return loss
+        def loss_function(is_first_step):
+            return model(images, self.distributed_loss_func, {
+                "batch_size": batch_size,
+                "is_first_step": is_first_step,
+                "criterion_seg": criterion_seg,
+                "criterion_dec": criterion_dec,
+                "weight_loss_seg": weight_loss_seg,
+                "weight_loss_dec": weight_loss_dec,
+                "seg_masks": seg_masks,
+                "claz": claz,
+                "is_segmented": is_segmented,
+                "use_weighted_seg_loss": self.cfg.WEIGHTED_SEG_LOSS,
+                "seg_loss_masks": seg_loss_masks
+            })
         # End loss function
 
         if not self.cfg.USE_SAM:
@@ -131,7 +135,7 @@ class End2End:
              enable_running_stats(model)
 
         # First pass
-        loss, tl, tc, tls, tld = loss_function(True, 0)
+        loss, tl, tc, tls, tld = loss_function(True)
         total_loss += tl
         total_correct += tc
         total_loss_seg += tls
@@ -145,7 +149,7 @@ class End2End:
         else:
             optimizer.first_step(zero_grad=True)
             disable_running_stats(model)
-            loss_function(False, 0).backward()
+            loss_function(False).backward()
             optimizer.second_step(zero_grad=True)
 
         return total_loss_seg, total_loss_dec, total_loss, total_correct
@@ -168,15 +172,12 @@ class End2End:
             model.train()
 
             weight_loss_seg, weight_loss_dec = self.get_loss_weights(epoch)
-            dec_gradient_multiplier = self.get_dec_gradient_multiplier()
-            self.set_dec_gradient_multiplier(model, dec_gradient_multiplier)
 
             epoch_loss_seg, epoch_loss_dec, epoch_loss = 0, 0, 0
             epoch_correct = 0
             from timeit import default_timer as timer
 
             time_acc = 0
-            time_misc = 0
             start = timer()
             for iter_index, (data) in enumerate(train_loader):
                 start_1 = timer()

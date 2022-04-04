@@ -53,7 +53,7 @@ class FeatureNorm(nn.Module):
 
 
 class SegDecNet(nn.Module):
-    def __init__(self, device, input_width, input_height, input_channels, classes=1, use_hybrid=True):
+    def __init__(self, device, input_width, input_height, input_channels, classes=1, use_hybrid=False, gradient_multiplier=1):
         super(SegDecNet, self).__init__()
         if input_width % 8 != 0 or input_height % 8 != 0:
             raise Exception(f"Input size must be divisible by 8! width={input_width}, height={input_height}")
@@ -103,13 +103,16 @@ class SegDecNet(nn.Module):
 
         self.device = device
 
+        self.set_gradient_multipliers(gradient_multiplier)
+
 
     def set_gradient_multipliers(self, multiplier):
         self.volume_lr_multiplier_mask = (torch.ones((1,)) * multiplier).to(self.device)
         self.glob_max_lr_multiplier_mask = (torch.ones((1,)) * multiplier).to(self.device)
         self.glob_avg_lr_multiplier_mask = (torch.ones((1,)) * multiplier).to(self.device)
 
-    def forward(self, x):
+    def forward(self, x, loss_func=None, kwargs=None):
+
         volume = self.volume(x)
         if self.use_hybrid:
             cfp = self.cfp(x)
@@ -138,6 +141,10 @@ class SegDecNet(nn.Module):
         fc_in = torch.cat([global_max_feat, global_avg_feat, global_max_seg, global_avg_seg], dim=1)
         fc_in = fc_in.reshape(fc_in.size(0), -1)
         prediction = self.fc(fc_in)
+
+        if loss_func is not None and kwargs is not None:
+            return loss_func(prediction, seg_mask, **kwargs)
+
         return prediction, seg_mask
 
 
