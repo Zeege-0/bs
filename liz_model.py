@@ -7,7 +7,7 @@ from CFPNetOrigin import CFPEncoder
 
 
 class LizNet(nn.Module):
-    def __init__(self, use_med, device, input_width, input_height, input_channels, classes=1):
+    def __init__(self, use_med, device, input_width, input_height, input_channels, classes=1, streams=None):
         """
         :param device: device
         :param input_width: input width
@@ -17,6 +17,7 @@ class LizNet(nn.Module):
         """
         super(LizNet, self).__init__()
         self.use_med = use_med
+        self.streams = streams
 
         if input_width % 8 != 0 or input_height % 8 != 0:
             raise Exception(f"Input size must be divisible by 8! width={input_width}, height={input_height}")
@@ -27,19 +28,21 @@ class LizNet(nn.Module):
             self.volume = CFPNetMed(input_channels, True)
             self.seg_mask = nn.MaxPool2d(kernel_size=8, stride=8)
         else:
-            self.volume = CFPEncoder(input_channels)
+            self.volume = CFPEncoder(input_channels, 2, 6)
             self.seg_mask = nn.Sequential(
-                Conv2d_init(in_channels=256 + input_channels, out_channels=1, kernel_size=1, padding=0, bias=False),
+                Conv2d_init(in_channels=576 + input_channels, out_channels=1, kernel_size=1, padding=0, bias=False),
                 FeatureNorm(num_features=1, eps=0.001, include_bias=False))
 
         self.extractor = nn.Sequential(nn.MaxPool2d(kernel_size=2),
-                                       _conv_block(in_chanels=257 + input_channels, out_chanels=8, kernel_size=5, padding=2),
+                                       _conv_block(in_chanels=577 + input_channels, out_chanels=8, kernel_size=5, padding=2),
                                        nn.MaxPool2d(kernel_size=2),
                                        _conv_block(in_chanels=8, out_chanels=16, kernel_size=5, padding=2),
                                        nn.MaxPool2d(kernel_size=2),
                                        _conv_block(in_chanels=16, out_chanels=32, kernel_size=5, padding=2))
 
-        self.fc = nn.Linear(in_features=66, out_features=classes)
+        self.fc = nn.Sequential(
+            nn.Linear(in_features=66, out_features=classes),
+        )
 
         self.volume_lr_multiplier_layer = GradientMultiplyLayer().apply
         self.glob_max_lr_multiplier_layer = GradientMultiplyLayer().apply
@@ -58,7 +61,7 @@ class LizNet(nn.Module):
             seg_mask, volume = self.volume(x)
             seg_mask = self.seg_mask(seg_mask)
         else:
-            volume = self.volume(x)
+            volume = self.volume(x, self.streams)
             seg_mask = self.seg_mask(volume)
 
         cat = torch.cat([volume, seg_mask], dim=1)

@@ -25,7 +25,7 @@ def get_dataset(kind: str, cfg: Config) -> Optional[DataLoader]:
 
     shuffle = kind == "TRAIN"
     batch_size = cfg.BATCH_SIZE if kind == "TRAIN" else 1
-    num_workers = 2
+    num_workers = 0
     drop_last = kind == "TRAIN"
     pin_memory = True
 

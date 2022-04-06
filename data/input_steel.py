@@ -35,8 +35,6 @@ class SteelDataset(Dataset):
         self.read_contents()
 
     def read_contents(self):
-        if not self.cfg.ON_DEMAND_READ:
-            raise Exception("Need to implement eager loading!")
 
         pos_samples, neg_samples = [], []
 
@@ -50,9 +48,20 @@ class SteelDataset(Dataset):
 
             if sample in annotations:
                 rle = list(map(int, annotations[sample].split(" ")))
-                pos_samples.append((None, None, None, is_segmented, img_path, rle, sample))
+                img = self.read_img_resize(img_path, self.grayscale, self.image_size)                    
+                seg_mask = self.rle_to_mask(rle, self.image_size)
+                seg_loss_mask = self.distance_transform(seg_mask, self.cfg.WEIGHTED_SEG_LOSS_MAX, self.cfg.WEIGHTED_SEG_LOSS_P)
+                image = self.to_tensor(img)
+                seg_mask = self.to_tensor(self.downsize(seg_mask))
+                seg_loss_mask = self.to_tensor(self.downsize(seg_loss_mask))
+                pos_samples.append((image, seg_mask, seg_loss_mask, is_segmented, img_path, rle, sample)) # Image, segmask, seglossmask
             else:
-                neg_samples.append((None, None, None, True, img_path, None, sample))
+                seg_mask = np.zeros_like(img)
+                seg_loss_mask = np.ones_like(seg_mask)
+                image = self.to_tensor(img)
+                seg_mask = self.to_tensor(self.downsize(seg_mask))
+                seg_loss_mask = self.to_tensor(self.downsize(seg_loss_mask))
+                neg_samples.append((image, seg_mask, seg_loss_mask, True, img_path, None, sample))
 
         self.pos_samples = pos_samples
         self.neg_samples = neg_samples

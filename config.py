@@ -84,9 +84,9 @@ class Config:
             self.VALIDATE_ON_TEST = False
             self.USE_BEST_MODEL = True
             print("Will use best model according to validation loss, validation is not performed on test set!")
-            if not self.ON_DEMAND_READ:
-                print("Will use ON_DEMAND_READ even though it is set on False!")
-                self.ON_DEMAND_READ = True
+            # if not self.ON_DEMAND_READ:
+            #     print("Will use ON_DEMAND_READ even though it is set on False!")
+            #     self.ON_DEMAND_READ = True
             if self.TRAIN_NUM is None:
                 raise Exception("Missing TRAIN_NUM for STEEL dataset!")
             if self.NUM_SEGMENTED is None:

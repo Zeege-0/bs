@@ -6,7 +6,7 @@ from models import SegDecNet
 from liz_model import LizNet
 import numpy as np
 import os
-from torch import nn as nn
+from torch import Stream, nn as nn
 import torch
 import utils
 import pandas as pd
@@ -14,6 +14,7 @@ from data.dataset_catalog import get_dataset
 import random
 import cv2
 from config import Config
+from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 from sam import SAM, enable_running_stats, disable_running_stats
 
@@ -51,6 +52,7 @@ class End2End:
         device = self._get_device()
         model = self._get_model().to(device)
         optimizer = self._get_optimizer(model)
+        scheduler = self._get_scheduler(optimizer)
         loss_seg, loss_dec = self._get_loss(True), self._get_loss(False)
 
         train_loader = get_dataset("TRAIN", self.cfg)
@@ -59,7 +61,7 @@ class End2End:
         tensorboard_writer = SummaryWriter(log_dir=self.tensorboard_path) if WRITE_TENSORBOARD else None
 
         self._log("Starting training")
-        train_results = self._train_model(device, model, train_loader, loss_seg, loss_dec, optimizer, validation_loader, tensorboard_writer)
+        train_results = self._train_model(device, model, train_loader, loss_seg, loss_dec, optimizer, scheduler, validation_loader, tensorboard_writer)
         self._save_train_results(train_results)
         self._save_model(model)
 
@@ -72,7 +74,7 @@ class End2End:
         test_loader = get_dataset("TEST", self.cfg)
         self.eval_model(device, model, test_loader, save_folder=self.outputs_path, save_images=save_images, is_validation=False, plot_seg=plot_seg)
 
-    def training_iteration(self, data, device, model, criterion_seg, criterion_dec, optimizer, weight_loss_seg, weight_loss_dec,
+    def training_iteration(self, data, device, model, criterion_seg, criterion_dec, optimizer, scheduler, weight_loss_seg, weight_loss_dec,
                            tensorboard_writer, iter_index):
         images, claz, seg_masks, seg_loss_masks, is_segmented, _ = data
 
@@ -128,7 +130,7 @@ class End2End:
         if not self.cfg.USE_SAM:
             optimizer.zero_grad()
         else:
-             enable_running_stats(model)
+            enable_running_stats(model)
 
         # First pass
         loss, tl, tc, tls, tld = loss_function(True, 0)
@@ -139,6 +141,7 @@ class End2End:
         loss.backward()
 
         # Backward and optimize
+        scheduler.step(total_loss)
         if not self.cfg.USE_SAM:
             optimizer.step()
             optimizer.zero_grad()
@@ -150,79 +153,88 @@ class End2End:
 
         return total_loss_seg, total_loss_dec, total_loss, total_correct
 
-    def _train_model(self, device, model: nn.Module, train_loader, criterion_seg, criterion_dec, optimizer, validation_set, tensorboard_writer):
-        losses = []
-        validation_data = []
-        max_validation = -1
-        validation_step = self.cfg.VALIDATION_N_EPOCHS
+    def _train_model(self, device, model: nn.Module, train_loader, criterion_seg, criterion_dec, optimizer, scheduler, validation_set, tensorboard_writer):
+        try:
+            losses = []
+            validation_data = []
+            max_validation = -1
+            validation_step = self.cfg.VALIDATION_N_EPOCHS
 
-        num_epochs = self.cfg.EPOCHS
-        samples_per_epoch = len(train_loader) * self.cfg.BATCH_SIZE
+            num_epochs = self.cfg.EPOCHS
+            samples_per_epoch = len(train_loader) * self.cfg.BATCH_SIZE
 
-        self.set_dec_gradient_multiplier(model, 0.0)
+            self.set_dec_gradient_multiplier(model, 0.0)
 
-        for epoch in range(num_epochs):
-            if epoch % 5 == 0:
-                self._save_model(model, f"ep_{epoch:02}.pth")
-
-            model.train()
-
-            weight_loss_seg, weight_loss_dec = self.get_loss_weights(epoch)
-            dec_gradient_multiplier = self.get_dec_gradient_multiplier()
-            self.set_dec_gradient_multiplier(model, dec_gradient_multiplier)
-
-            epoch_loss_seg, epoch_loss_dec, epoch_loss = 0, 0, 0
-            epoch_correct = 0
-            from timeit import default_timer as timer
-
-            time_acc = 0
-            time_misc = 0
-            start = timer()
-            for iter_index, (data) in enumerate(train_loader):
-                start_1 = timer()
-                curr_loss_seg, curr_loss_dec, curr_loss, correct = self.training_iteration(data, device, model,
-                                                                                           criterion_seg,
-                                                                                           criterion_dec,
-                                                                                           optimizer, weight_loss_seg,
-                                                                                           weight_loss_dec,
-                                                                                           tensorboard_writer, (epoch * samples_per_epoch + iter_index))
-
-                end_1 = timer()
-                time_acc = time_acc + (end_1 - start_1)
-
-                epoch_loss_seg += curr_loss_seg
-                epoch_loss_dec += curr_loss_dec
-                epoch_loss += curr_loss
-
-                epoch_correct += correct
-
-            end = timer()
-
-            epoch_loss_seg = epoch_loss_seg / samples_per_epoch
-            epoch_loss_dec = epoch_loss_dec / samples_per_epoch
-            epoch_loss = epoch_loss / samples_per_epoch
-            losses.append((epoch_loss_seg, epoch_loss_dec, epoch_loss, epoch))
-
-            self._log(
-                f"Epoch {epoch + 1}/{num_epochs} ==> avg_loss_seg={epoch_loss_seg:.5f}, avg_loss_dec={epoch_loss_dec:.5f}, avg_loss={epoch_loss:.5f}, correct={epoch_correct}/{samples_per_epoch}, in {end - start:.2f}s/epoch (fwd/bck in {time_acc:.2f}s/epoch)")
-
-            if tensorboard_writer is not None:
-                tensorboard_writer.add_scalar("Loss/Train/segmentation", epoch_loss_seg, epoch)
-                tensorboard_writer.add_scalar("Loss/Train/classification", epoch_loss_dec, epoch)
-                tensorboard_writer.add_scalar("Loss/Train/joined", epoch_loss, epoch)
-                tensorboard_writer.add_scalar("Accuracy/Train/", epoch_correct / samples_per_epoch, epoch)
-
-            if self.cfg.VALIDATE and (epoch % validation_step == 0 or epoch == num_epochs - 1):
-                validation_ap, validation_accuracy, f1, FP, FN, TP, TN = self.eval_model(device, model, validation_set, None, False, True, False)
-                validation_data.append((validation_ap, epoch, f1, FP, FN, TP, TN))
-
-                if validation_ap > max_validation:
-                    max_validation = validation_ap
-                    self._save_model(model, "best_state_dict.pth")
+            for epoch in range(num_epochs):
+                if epoch % 5 == 0:
+                    self._save_model(model, f"ep_{epoch:02}.pth")
 
                 model.train()
+
+                weight_loss_seg, weight_loss_dec = self.get_loss_weights(epoch)
+                dec_gradient_multiplier = self.get_dec_gradient_multiplier()
+                self.set_dec_gradient_multiplier(model, dec_gradient_multiplier)
+
+                epoch_loss_seg, epoch_loss_dec, epoch_loss = 0, 0, 0
+                epoch_correct = 0
+                from timeit import default_timer as timer
+
+                pbar = tqdm(total=len(train_loader), ncols=80)
+                time_acc = 0
+                start = timer()
+                for iter_index, (data) in enumerate(train_loader):
+                    torch.cuda.empty_cache()
+                    start_1 = timer()
+                    curr_loss_seg, curr_loss_dec, curr_loss, correct = self.training_iteration(data, device, model,
+                                                                                            criterion_seg,
+                                                                                            criterion_dec,
+                                                                                            optimizer, scheduler,
+                                                                                            weight_loss_seg,
+                                                                                            weight_loss_dec,
+                                                                                            tensorboard_writer, (epoch * samples_per_epoch + iter_index))
+
+                    end_1 = timer()
+                    time_acc = time_acc + (end_1 - start_1)
+
+                    epoch_loss_seg += curr_loss_seg
+                    epoch_loss_dec += curr_loss_dec
+                    epoch_loss += curr_loss
+                    epoch_correct += correct
+
+                    pbar.set_description(f"{iter_index}/{len(train_loader)}")
+                    pbar.update(1)
+
+                end = timer()
+                pbar.close()
+
+                epoch_loss_seg = epoch_loss_seg / samples_per_epoch
+                epoch_loss_dec = epoch_loss_dec / samples_per_epoch
+                epoch_loss = epoch_loss / samples_per_epoch
+                losses.append((epoch_loss_seg, epoch_loss_dec, epoch_loss, epoch))
+
+                self._log(
+                    f"Epoch {epoch + 1}/{num_epochs} ==> avg_loss_seg={epoch_loss_seg:.5f}, avg_loss_dec={epoch_loss_dec:.5f}, avg_loss={epoch_loss:.5f}, correct={epoch_correct}/{samples_per_epoch}, in {end - start:.2f}s/epoch (fwd/bck in {time_acc:.2f}s/epoch)")
+
                 if tensorboard_writer is not None:
-                    tensorboard_writer.add_scalar("Accuracy/Validation/", validation_accuracy, epoch)
+                    tensorboard_writer.add_scalar("Loss/Train/segmentation", epoch_loss_seg, epoch)
+                    tensorboard_writer.add_scalar("Loss/Train/classification", epoch_loss_dec, epoch)
+                    tensorboard_writer.add_scalar("Loss/Train/joined", epoch_loss, epoch)
+                    tensorboard_writer.add_scalar("Accuracy/Train/", epoch_correct / samples_per_epoch, epoch)
+
+                if self.cfg.VALIDATE and (epoch % validation_step == 0 or epoch == num_epochs - 1):
+                    validation_ap, validation_accuracy, f1, FP, FN, TP, TN = self.eval_model(device, model, validation_set, None, False, True, False)
+                    validation_data.append((validation_ap, epoch, f1, FP, FN, TP, TN))
+
+                    if validation_ap > max_validation:
+                        max_validation = validation_ap
+                        self._save_model(model, "best_state_dict.pth")
+
+                    model.train()
+                    if tensorboard_writer is not None:
+                        tensorboard_writer.add_scalar("Accuracy/Validation/", validation_accuracy, epoch)
+        except KeyboardInterrupt:
+            print("Training interupted by keyboard")
+            pass
 
         return losses, validation_data
 
@@ -234,6 +246,8 @@ class End2End:
         res = []
         predictions, ground_truths = [], []
 
+        if not is_validation:
+            pbar = tqdm(total=len(eval_loader))
         for data_point in eval_loader:
             image, claz, seg_mask, seg_loss_mask, _, sample_name = data_point
             image, seg_mask = image.to(device), seg_mask.to(device)
@@ -251,6 +265,7 @@ class End2End:
             ground_truths.append(is_pos)
             res.append((prediction, None, None, is_pos, sample_name[0]))
             if not is_validation:
+                pbar.update(1)
                 if save_images:
                     image = cv2.resize(np.transpose(image[0, :, :, :], (1, 2, 0)), dsize)
                     image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
@@ -261,7 +276,7 @@ class End2End:
                         utils.plot_sample(sample_name[0], image, pred_seg, seg_loss_mask, save_folder, decision=prediction, plot_seg=plot_seg)
                     else:
                         utils.plot_sample(sample_name[0], image, pred_seg, seg_mask, save_folder, decision=prediction, plot_seg=plot_seg)
-
+        
         if is_validation:
             metrics = utils.get_metrics(np.array(ground_truths), np.array(predictions))
             FP, FN, TP, TN = list(map(sum, [metrics["FP"], metrics["FN"], metrics["TP"], metrics["TN"]]))
@@ -270,6 +285,7 @@ class End2End:
 
             return metrics["AP"], metrics["accuracy"], metrics["best_f_measure"], FP, FN, TP, TN
         else:
+            pbar.close()
             utils.evaluate_metrics(res, self.run_path, self.run_name)
 
     def get_dec_gradient_multiplier(self):
@@ -344,7 +360,13 @@ class End2End:
         if os.path.exists(output_name):
             os.remove(output_name)
 
+        streams = None
+        if hasattr(model, 'streams'):
+            streams = model.streams
+            delattr(model, 'streams')
         torch.save(model, output_name)
+        if streams is not None:
+            model.streams = streams
 
     def _get_optimizer(self, model):
         if self.cfg.USE_SAM:
@@ -352,6 +374,9 @@ class End2End:
             return SAM(model.parameters(), base_optimizer, lr=self.cfg.LEARNING_RATE, momentum=0.9)
         else:
             return torch.optim.SGD(model.parameters(), self.cfg.LEARNING_RATE)
+
+    def _get_scheduler(self, optimizer):
+        return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5, min_lr=1e-4, factor=0.5)
 
     def _get_loss(self, is_seg):
         reduction = "none" if self.cfg.WEIGHTED_SEG_LOSS and is_seg else "mean"
@@ -383,7 +408,10 @@ class End2End:
 
     def _get_model(self):
         if self.cfg.MY:
-            seg_net = LizNet(self.cfg.USE_MED, self._get_device(), self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT, self.cfg.INPUT_CHANNELS)
+            streams = [torch.cuda.Stream() for i in range(3)]
+            seg_net = LizNet(self.cfg.USE_MED, self._get_device(), 
+                             self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT, self.cfg.INPUT_CHANNELS, 
+                             classes=1, streams=streams)
         else:
             seg_net = SegDecNet(self._get_device(), self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT, self.cfg.INPUT_CHANNELS, use_hybrid=self.cfg.USE_HYBRID)
         return seg_net

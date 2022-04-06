@@ -1,8 +1,17 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from van import Attention, Block
 
 __all__ = ["CFPNet"]
+
+
+class MultiInputSequential(nn.Sequential):
+    def forward(self, x, *args):
+        for module in self._modules.values():
+            x = module(x, *args)
+        return x
+
 
 class DeConv(nn.Module):
     def __init__(self, nIn, nOut, kSize, stride, padding, output_padding, dilation=(1, 1), groups=1, bn_acti=False, bias=False):
@@ -64,7 +73,7 @@ class BNPReLU(nn.Module):
 
 
 class CFPModule(nn.Module):
-    def __init__(self, nIn, d=1, KSize=3,dkSize=3):
+    def __init__(self, nIn, d=1, KSize=3, dkSize=3):
         super().__init__()
         
         self.bn_relu_1 = BNPReLU(nIn)
@@ -136,54 +145,56 @@ class CFPModule(nn.Module):
         
         self.conv1x1 = Conv(nIn, nIn, 1, 1, padding=0,bn_acti=False)
         
-    def forward(self, input):
+    def forward(self, input, streams):
         inp = self.bn_relu_1(input)
         inp = self.conv1x1_1(inp)
         
-        o1_1 = self.dconv3x1_1_1(inp)
-        o1_1 = self.dconv1x3_1_1(o1_1)
-        o1_2 = self.dconv3x1_1_2(o1_1)
-        o1_2 = self.dconv1x3_1_2(o1_2)
-        o1_3 = self.dconv3x1_1_3(o1_2)
-        o1_3 = self.dconv1x3_1_3(o1_3)
+        with torch.cuda.stream(streams[0]):
+            o1_1 = self.dconv3x1_1_1(inp)
+            o1_1 = self.dconv1x3_1_1(o1_1)
+            o1_2 = self.dconv3x1_1_2(o1_1)
+            o1_2 = self.dconv1x3_1_2(o1_2)
+            o1_3 = self.dconv3x1_1_3(o1_2)
+            o1_3 = self.dconv1x3_1_3(o1_3)
+            output_1 = torch.cat([o1_1,o1_2,o1_3], 1)
+
+            o2_1 = self.dconv3x1_2_1(inp)
+            o2_1 = self.dconv1x3_2_1(o2_1)
+            o2_2 = self.dconv3x1_2_2(o2_1)
+            o2_2 = self.dconv1x3_2_2(o2_2)
+            o2_3 = self.dconv3x1_2_3(o2_2)
+            o2_3 = self.dconv1x3_2_3(o2_3) 
+            output_2 = torch.cat([o2_1,o2_2,o2_3], 1) 
+    
+        with torch.cuda.stream(streams[1]):
+            o3_1 = self.dconv3x1_3_1(inp)
+            o3_1 = self.dconv1x3_3_1(o3_1)
+            o3_2 = self.dconv3x1_3_2(o3_1)
+            o3_2 = self.dconv1x3_3_2(o3_2)
+            o3_3 = self.dconv3x1_3_3(o3_2)
+            o3_3 = self.dconv1x3_3_3(o3_3)
+            output_3 = torch.cat([o3_1,o3_2,o3_3], 1)          
         
-        o2_1 = self.dconv3x1_2_1(inp)
-        o2_1 = self.dconv1x3_2_1(o2_1)
-        o2_2 = self.dconv3x1_2_2(o2_1)
-        o2_2 = self.dconv1x3_2_2(o2_2)
-        o2_3 = self.dconv3x1_2_3(o2_2)
-        o2_3 = self.dconv1x3_2_3(o2_3)        
-     
-        o3_1 = self.dconv3x1_3_1(inp)
-        o3_1 = self.dconv1x3_3_1(o3_1)
-        o3_2 = self.dconv3x1_3_2(o3_1)
-        o3_2 = self.dconv1x3_3_2(o3_2)
-        o3_3 = self.dconv3x1_3_3(o3_2)
-        o3_3 = self.dconv1x3_3_3(o3_3)               
+            o4_1 = self.dconv3x1_4_1(inp)
+            o4_1 = self.dconv1x3_4_1(o4_1)
+            o4_2 = self.dconv3x1_4_2(o4_1)
+            o4_2 = self.dconv1x3_4_2(o4_2)
+            o4_3 = self.dconv3x1_4_3(o4_2)
+            o4_3 = self.dconv1x3_4_3(o4_3)
+            output_4 = torch.cat([o4_1,o4_2,o4_3], 1)  
         
-        
-        o4_1 = self.dconv3x1_4_1(inp)
-        o4_1 = self.dconv1x3_4_1(o4_1)
-        o4_2 = self.dconv3x1_4_2(o4_1)
-        o4_2 = self.dconv1x3_4_2(o4_2)
-        o4_3 = self.dconv3x1_4_3(o4_2)
-        o4_3 = self.dconv1x3_4_3(o4_3)               
-        
-        
-        output_1 = torch.cat([o1_1,o1_2,o1_3], 1)
-        output_2 = torch.cat([o2_1,o2_2,o2_3], 1)      
-        output_3 = torch.cat([o3_1,o3_2,o3_3], 1)       
-        output_4 = torch.cat([o4_1,o4_2,o4_3], 1)   
-        
+        torch.cuda.current_stream().wait_stream(streams[0])
+        torch.cuda.current_stream().wait_stream(streams[1])
+
         ad1 = output_1
         ad2 = ad1 + output_2
         ad3 = ad2 + output_3
         ad4 = ad3 + output_4
-        output = torch.cat([ad1,ad2,ad3,ad4],1)
+        output = torch.cat([ad1, ad2, ad3, ad4],1)
         output = self.bn_relu_2(output)
         output = self.conv1x1(output)
         
-        return output+input
+        return output + input
         
 
 class DownSamplingBlock(nn.Module):
@@ -231,9 +242,9 @@ class CFPEncoder(nn.Module):
     def __init__(self, img_channels, block_1=2, block_2=6):
         super().__init__()
         self.init_conv = nn.Sequential(
-            Conv(img_channels, 32, 3, 2, padding=1, bn_acti=True),
+            Conv(img_channels, 32, 3, 2, padding=3, bn_acti=True),
             Conv(32, 32, 3, 1, padding=1, bn_acti=True),
-            Conv(32, 32, 3, 1, padding=1, bn_acti=True),
+            Conv(32, 32, 3, 1, padding=1, bn_acti=True)
         )
 
         self.down_1 = InputInjection(1)  # down-sample the image 1 times
@@ -241,106 +252,67 @@ class CFPEncoder(nn.Module):
         self.down_3 = InputInjection(3)  # down-sample the image 3 times
 
         self.bn_prelu_1 = BNPReLU(32 + img_channels)
-        dilation_block_1 =[1, 3]
+
+        # Attention Block 1
+        self.att1 = nn.Sequential(
+            Conv(64, 64, 5, 1, padding=2, bn_acti=True),
+            Conv(64, 64, 5, 1, padding=2, bn_acti=True),
+            Conv(64, 64, 5, 1, padding=2, bn_acti=True),
+        )
+
+        # Attention Block 2
+        self.att2 = nn.Sequential(
+            Conv(192, 192, 5, 1, padding=2, bn_acti=True),
+            Conv(192, 192, 5, 1, padding=2, bn_acti=True),
+            Conv(192, 192, 5, 1, padding=2, bn_acti=True),
+            Attention(192)
+        )
+        
         # CFP Block 1
+        dilation_block_1 =[1, 3]
         self.downsample_1 = DownSamplingBlock(32 + img_channels, 64)
-        self.CFP_Block_1 = nn.Sequential()
+        self.CFP_Block_1 = MultiInputSequential()
         for i in range(0, block_1):
             self.CFP_Block_1.add_module("CFP_Module_1_" + str(i), CFPModule(64, d=dilation_block_1[i]))
             
-        self.bn_prelu_2 = BNPReLU(128 + img_channels)
+        self.bn_prelu_2 = BNPReLU(192 + img_channels)
 
         # CFP Block 2
         dilation_block_2 = [4, 4, 8, 8, 16, 16] #camvid #cityscapes [4,4,8,8,16,16] # [4,8,16]
-        self.downsample_2 = DownSamplingBlock(128 + img_channels, 128)
-        self.CFP_Block_2 = nn.Sequential()
+        self.downsample_2 = DownSamplingBlock(192 + img_channels, 192)
+        self.CFP_Block_2 = MultiInputSequential()
         for i in range(0, block_2):
             self.CFP_Block_2.add_module("CFP_Module_2_" + str(i),
-                                        CFPModule(128, d=dilation_block_2[i]))
-        self.bn_prelu_3 = BNPReLU(256 + img_channels)
+                                        CFPModule(192, d=dilation_block_2[i]))
+        self.bn_prelu_3 = BNPReLU(576 + img_channels)
 
+    def forward(self, x, streams):
 
-    def forward(self, input):
+        o2x32 = self.init_conv(x)
+        down_1 = self.down_1(x)
+        down_2 = self.down_2(x)
+        down_3 = self.down_3(x)
+        o2x32_cat = self.bn_prelu_1(torch.cat([o2x32, down_1], 1))
 
-        output0 = self.init_conv(input)
-
-        down_1 = self.down_1(input)
-        down_2 = self.down_2(input)
-        down_3 = self.down_3(input)
-
-        output0_cat = self.bn_prelu_1(torch.cat([output0, down_1], 1))
-
+        # Stage 1
+        o4x64 = self.downsample_1(o2x32_cat)
+        # Attention Block 1
+        with torch.cuda.stream(streams[0]):
+            att1 = self.att1(o4x64)
         # CFP Block 1
-        output1_0 = self.downsample_1(output0_cat)
-        output1 = self.CFP_Block_1(output1_0)
-        output1_cat = self.bn_prelu_2(torch.cat([output1, output1_0, down_2], 1))
+        cfp1 = self.CFP_Block_1(o4x64, streams[1:])
+        torch.cuda.synchronize()
+        o4x128 = self.bn_prelu_2(torch.cat([att1, cfp1, o4x64, down_2], 1))
 
+        # Stage 2
+        o8x128 = self.downsample_2(o4x128)
+        # Attention Block 2
+        with torch.cuda.stream(streams[0]):
+            att2 = self.att2(o8x128)
         # CFP Block 2
-        output2_0 = self.downsample_2(output1_cat)
-        output2 = self.CFP_Block_2(output2_0)
-        output2_cat = self.bn_prelu_3(torch.cat([output2, output2_0, down_3], 1))
+        cfp2 = self.CFP_Block_2(o8x128, streams[1:])
+        torch.cuda.synchronize()
+        o8x256 = self.bn_prelu_3(torch.cat([att2, cfp2, o8x128, down_3], 1))
 
-        return output2_cat
-    
-
-
-class CFPNet(nn.Module):
-    def __init__(self, classes=11, block_1=2, block_2=6):
-        super().__init__()
-        self.init_conv = nn.Sequential(
-            Conv(3, 32, 3, 2, padding=1, bn_acti=True),
-            Conv(32, 32, 3, 1, padding=1, bn_acti=True),
-            Conv(32, 32, 3, 1, padding=1, bn_acti=True),
-        )
-
-        self.down_1 = InputInjection(1)  # down-sample the image 1 times
-        self.down_2 = InputInjection(2)  # down-sample the image 2 times
-        self.down_3 = InputInjection(3)  # down-sample the image 3 times
-
-        self.bn_prelu_1 = BNPReLU(32 + 3)
-        dilation_block_1 =[2, 2]
-        # CFP Block 1
-        self.downsample_1 = DownSamplingBlock(32 + 3, 64)
-        self.CFP_Block_1 = nn.Sequential()
-        for i in range(0, block_1):
-            self.CFP_Block_1.add_module("CFP_Module_1_" + str(i), CFPModule(64, d=dilation_block_1[i]))
-            
-        self.bn_prelu_2 = BNPReLU(128 + 3)
-
-        # CFP Block 2
-        dilation_block_2 = [4,4,8,8,16,16] #camvid #cityscapes [4,4,8,8,16,16] # [4,8,16]
-        self.downsample_2 = DownSamplingBlock(128 + 3, 128)
-        self.CFP_Block_2 = nn.Sequential()
-        for i in range(0, block_2):
-            self.CFP_Block_2.add_module("CFP_Module_2_" + str(i),
-                                        CFPModule(128, d=dilation_block_2[i]))
-        self.bn_prelu_3 = BNPReLU(256 + 3)
-
-        self.classifier = nn.Sequential(Conv(259, classes, 1, 1, padding=0))
-
-    def forward(self, input):
-
-        output0 = self.init_conv(input)
-
-        down_1 = self.down_1(input)
-        down_2 = self.down_2(input)
-        down_3 = self.down_3(input)
-
-        output0_cat = self.bn_prelu_1(torch.cat([output0, down_1], 1))
-
-        # CFP Block 1
-        output1_0 = self.downsample_1(output0_cat)
-        output1 = self.CFP_Block_1(output1_0)
-        output1_cat = self.bn_prelu_2(torch.cat([output1, output1_0, down_2], 1))
-
-        # CFP Block 2
-        output2_0 = self.downsample_2(output1_cat)
-        output2 = self.CFP_Block_2(output2_0)
-        output2_cat = self.bn_prelu_3(torch.cat([output2, output2_0, down_3], 1))
-
-        out = self.classifier(output2_cat)
-        out = F.interpolate(out, input.size()[2:], mode='bilinear', align_corners=False)
-
-        return out
-    
+        return o8x256
     
