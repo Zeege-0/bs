@@ -242,7 +242,7 @@ class CFPEncoder(nn.Module):
     def __init__(self, img_channels, block_1=2, block_2=6):
         super().__init__()
         self.init_conv = nn.Sequential(
-            Conv(img_channels, 32, 3, 2, padding=3, bn_acti=True),
+            Conv(img_channels, 32, 3, 2, padding=1, bn_acti=True),
             Conv(32, 32, 3, 1, padding=1, bn_acti=True),
             Conv(32, 32, 3, 1, padding=1, bn_acti=True)
         )
@@ -252,21 +252,6 @@ class CFPEncoder(nn.Module):
         self.down_3 = InputInjection(3)  # down-sample the image 3 times
 
         self.bn_prelu_1 = BNPReLU(32 + img_channels)
-
-        # Attention Block 1
-        self.att1 = nn.Sequential(
-            Conv(64, 64, 5, 1, padding=2, bn_acti=True),
-            Conv(64, 64, 5, 1, padding=2, bn_acti=True),
-            Conv(64, 64, 5, 1, padding=2, bn_acti=True),
-        )
-
-        # Attention Block 2
-        self.att2 = nn.Sequential(
-            Conv(192, 192, 5, 1, padding=2, bn_acti=True),
-            Conv(192, 192, 5, 1, padding=2, bn_acti=True),
-            Conv(192, 192, 5, 1, padding=2, bn_acti=True),
-            Attention(192)
-        )
         
         # CFP Block 1
         dilation_block_1 =[1, 3]
@@ -275,16 +260,16 @@ class CFPEncoder(nn.Module):
         for i in range(0, block_1):
             self.CFP_Block_1.add_module("CFP_Module_1_" + str(i), CFPModule(64, d=dilation_block_1[i]))
             
-        self.bn_prelu_2 = BNPReLU(192 + img_channels)
+        self.bn_prelu_2 = BNPReLU(128 + img_channels)
 
         # CFP Block 2
         dilation_block_2 = [4, 4, 8, 8, 16, 16] #camvid #cityscapes [4,4,8,8,16,16] # [4,8,16]
-        self.downsample_2 = DownSamplingBlock(192 + img_channels, 192)
+        self.downsample_2 = DownSamplingBlock(128 + img_channels, 128)
         self.CFP_Block_2 = MultiInputSequential()
         for i in range(0, block_2):
             self.CFP_Block_2.add_module("CFP_Module_2_" + str(i),
-                                        CFPModule(192, d=dilation_block_2[i]))
-        self.bn_prelu_3 = BNPReLU(576 + img_channels)
+                                        CFPModule(128, d=dilation_block_2[i]))
+        self.bn_prelu_3 = BNPReLU(256 + img_channels)
 
     def forward(self, x, streams):
 
@@ -296,23 +281,17 @@ class CFPEncoder(nn.Module):
 
         # Stage 1
         o4x64 = self.downsample_1(o2x32_cat)
-        # Attention Block 1
-        with torch.cuda.stream(streams[0]):
-            att1 = self.att1(o4x64)
         # CFP Block 1
-        cfp1 = self.CFP_Block_1(o4x64, streams[1:])
+        cfp1 = self.CFP_Block_1(o4x64, streams)
         torch.cuda.synchronize()
-        o4x128 = self.bn_prelu_2(torch.cat([att1, cfp1, o4x64, down_2], 1))
+        o4x128 = self.bn_prelu_2(torch.cat([cfp1, o4x64, down_2], 1))
 
         # Stage 2
         o8x128 = self.downsample_2(o4x128)
-        # Attention Block 2
-        with torch.cuda.stream(streams[0]):
-            att2 = self.att2(o8x128)
         # CFP Block 2
-        cfp2 = self.CFP_Block_2(o8x128, streams[1:])
+        cfp2 = self.CFP_Block_2(o8x128, streams)
         torch.cuda.synchronize()
-        o8x256 = self.bn_prelu_3(torch.cat([att2, cfp2, o8x128, down_3], 1))
+        o8x256 = self.bn_prelu_3(torch.cat([cfp2, o8x128, down_3], 1))
 
         return o8x256
     

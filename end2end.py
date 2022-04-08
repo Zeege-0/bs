@@ -97,11 +97,6 @@ class End2End:
             is_pos_ = claz[start_idx:end_idx].to(device)
             is_segmented_ = is_segmented[start_idx:end_idx].to(device)
 
-            if tensorboard_writer is not None and iter_index % 100 == 0:
-                tensorboard_writer.add_image(f"{iter_index}/image", images_[0, :, :, :])
-                tensorboard_writer.add_image(f"{iter_index}/seg_mask", seg_masks[0, :, :, :])
-                tensorboard_writer.add_image(f"{iter_index}/seg_loss_mask", seg_loss_masks_[0, :, :, :])
-
             decision, output_seg_mask = model(images_)
 
             # fake label for non segmented images
@@ -201,7 +196,6 @@ class End2End:
                     epoch_loss += curr_loss
                     epoch_correct += correct
 
-                    pbar.set_description(f"{iter_index}/{len(train_loader)}")
                     pbar.update(1)
 
                 end = timer()
@@ -238,6 +232,36 @@ class End2End:
 
         return losses, validation_data
 
+    def validate(self, device, model, eval_loader):
+        model.eval()
+        predictions, ground_truths = [], []
+
+        pbar = tqdm(total=len(eval_loader), ncols=80)
+        for data_point in eval_loader:
+            torch.cuda.empty_cache()
+            image, claz, seg_mask, seg_loss_mask, _, sample_name = data_point
+            image, seg_mask = image.to(device), seg_mask.to(device)
+            prediction, pred_seg = model(image)
+            pred_seg = nn.Sigmoid()(pred_seg)
+            prediction = nn.Sigmoid()(prediction)
+
+            image = image.detach().cpu().numpy()
+            pred_seg = pred_seg.detach().cpu().numpy()
+            seg_mask = seg_mask.detach().cpu().numpy()
+            prediction = prediction.detach().cpu().numpy().reshape((self.cfg.BATCH_SIZE,))
+            predictions.extend(prediction)
+            ground_truths.extend(claz.detach().cpu().numpy())
+
+            pbar.update(1)
+
+        pbar.close()
+        metrics = utils.get_metrics(np.array(ground_truths), np.array(predictions))
+        FP, FN, TP, TN = list(map(sum, [metrics["FP"], metrics["FN"], metrics["TP"], metrics["TN"]]))
+        self._log(f"VALIDATION || AUC={metrics['AUC']:f}, and AP={metrics['AP']:f}, with best thr={metrics['best_thr']:f} "
+                    f"at f-measure={metrics['best_f_measure']:.3f} and FP={FP:d}, FN={FN:d}, TOTAL SAMPLES={FP + FN + TP + TN:d}")
+
+        return metrics["AP"], metrics["accuracy"], metrics["best_f_measure"], FP, FN, TP, TN
+
     def eval_model(self, device, model, eval_loader, save_folder, save_images, is_validation, plot_seg):
         model.eval()
 
@@ -246,25 +270,26 @@ class End2End:
         res = []
         predictions, ground_truths = [], []
 
-        if not is_validation:
+        if is_validation:
+            return self.validate(device, model, eval_loader)
+        else:
             pbar = tqdm(total=len(eval_loader))
-        for data_point in eval_loader:
-            image, claz, seg_mask, seg_loss_mask, _, sample_name = data_point
-            image, seg_mask = image.to(device), seg_mask.to(device)
-            is_pos = (seg_mask.max() > 0).reshape((1, 1)).to(device).item()
-            prediction, pred_seg = model(image)
-            pred_seg = nn.Sigmoid()(pred_seg)
-            prediction = nn.Sigmoid()(prediction)
+            for data_point in eval_loader:
+                image, claz, seg_mask, seg_loss_mask, _, sample_name = data_point
+                image, seg_mask = image.to(device), seg_mask.to(device)
+                is_pos = (seg_mask.max() > 0).reshape((1, 1)).to(device).item()
+                prediction, pred_seg = model(image)
+                pred_seg = nn.Sigmoid()(pred_seg)
+                prediction = nn.Sigmoid()(prediction)
 
-            prediction = prediction.item()
-            image = image.detach().cpu().numpy()
-            pred_seg = pred_seg.detach().cpu().numpy()
-            seg_mask = seg_mask.detach().cpu().numpy()
+                prediction = prediction.item()
+                image = image.detach().cpu().numpy()
+                pred_seg = pred_seg.detach().cpu().numpy()
+                seg_mask = seg_mask.detach().cpu().numpy()
 
-            predictions.append(prediction)
-            ground_truths.append(is_pos)
-            res.append((prediction, None, None, is_pos, sample_name[0]))
-            if not is_validation:
+                predictions.append(prediction)
+                ground_truths.append(is_pos)
+                res.append((prediction, None, None, is_pos, sample_name[0]))
                 pbar.update(1)
                 if save_images:
                     image = cv2.resize(np.transpose(image[0, :, :, :], (1, 2, 0)), dsize)
@@ -276,15 +301,6 @@ class End2End:
                         utils.plot_sample(sample_name[0], image, pred_seg, seg_loss_mask, save_folder, decision=prediction, plot_seg=plot_seg)
                     else:
                         utils.plot_sample(sample_name[0], image, pred_seg, seg_mask, save_folder, decision=prediction, plot_seg=plot_seg)
-        
-        if is_validation:
-            metrics = utils.get_metrics(np.array(ground_truths), np.array(predictions))
-            FP, FN, TP, TN = list(map(sum, [metrics["FP"], metrics["FN"], metrics["TP"], metrics["TN"]]))
-            self._log(f"VALIDATION || AUC={metrics['AUC']:f}, and AP={metrics['AP']:f}, with best thr={metrics['best_thr']:f} "
-                      f"at f-measure={metrics['best_f_measure']:.3f} and FP={FP:d}, FN={FN:d}, TOTAL SAMPLES={FP + FN + TP + TN:d}")
-
-            return metrics["AP"], metrics["accuracy"], metrics["best_f_measure"], FP, FN, TP, TN
-        else:
             pbar.close()
             utils.evaluate_metrics(res, self.run_path, self.run_name)
 

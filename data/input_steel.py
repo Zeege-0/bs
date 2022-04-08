@@ -1,9 +1,11 @@
+from functools import reduce
+import multiprocessing
 import os
 import numpy as np
 from data.dataset import Dataset
 import pickle
 import pandas as pd
-
+from tqdm import tqdm, trange
 
 def read_split(train_num: int, num_segmented: int, kind: str):
     fn = f"STEEL/split_{train_num}_{num_segmented}.pyb"
@@ -33,6 +35,7 @@ class SteelDataset(Dataset):
     def __init__(self, kind, cfg):
         super(SteelDataset, self).__init__(cfg.DATASET_PATH, cfg, kind)
         self.read_contents()
+        print(f"Loaded {kind} dataset")
 
     def read_contents(self):
 
@@ -42,13 +45,15 @@ class SteelDataset(Dataset):
         annotations = read_annotations(fn)
 
         samples = read_split(self.cfg.TRAIN_NUM, self.cfg.NUM_SEGMENTED, self.kind)
+
+        pbar = tqdm(total=len(samples), ncols=80)
         for sample, is_segmented in samples:
             img_name = f"{sample}.jpg"
             img_path = os.path.join(self.path, "train_images", img_name)
 
             if sample in annotations:
                 rle = list(map(int, annotations[sample].split(" ")))
-                img = self.read_img_resize(img_path, self.grayscale, self.image_size)                    
+                img = self.read_img_resize(img_path, self.grayscale, self.image_size)
                 seg_mask = self.rle_to_mask(rle, self.image_size)
                 seg_loss_mask = self.distance_transform(seg_mask, self.cfg.WEIGHTED_SEG_LOSS_MAX, self.cfg.WEIGHTED_SEG_LOSS_P)
                 image = self.to_tensor(img)
@@ -56,12 +61,17 @@ class SteelDataset(Dataset):
                 seg_loss_mask = self.to_tensor(self.downsize(seg_loss_mask))
                 pos_samples.append((image, seg_mask, seg_loss_mask, is_segmented, img_path, rle, sample)) # Image, segmask, seglossmask
             else:
+                img = self.read_img_resize(img_path, self.grayscale, self.image_size)
+                image = self.to_tensor(img)
                 seg_mask = np.zeros_like(img)
                 seg_loss_mask = np.ones_like(seg_mask)
-                image = self.to_tensor(img)
                 seg_mask = self.to_tensor(self.downsize(seg_mask))
                 seg_loss_mask = self.to_tensor(self.downsize(seg_loss_mask))
                 neg_samples.append((image, seg_mask, seg_loss_mask, True, img_path, None, sample))
+
+            pbar.update(1)
+
+        pbar.close()
 
         self.pos_samples = pos_samples
         self.neg_samples = neg_samples
@@ -71,3 +81,21 @@ class SteelDataset(Dataset):
         self.len = 2 * len(pos_samples) if self.kind in ['TRAIN'] else len(pos_samples) + len(neg_samples)
 
         self.init_extra()
+
+    def bulk_read_imgs(self, names):
+        imgs = []
+        pbar = tqdm(total=len(names), ncols=80)
+        for name, _ in names:
+            path = os.path.join(self.path, "train_images", f"{name}.jpg")
+            img = self.read_img_resize(path, self.grayscale, self.image_size)
+            imgs.append(img)
+            pbar.update(1)
+        pbar.close()
+        return imgs
+
+    def split_samples(self, sams, splits=4):
+        ret = []
+        for i in range(splits):
+            ret.append(sams[i * splits: max(len(sams), (i + 1) * splits)])
+        return ret
+
