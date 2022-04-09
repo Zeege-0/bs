@@ -1,7 +1,7 @@
 import math
 import torch
 import torch.nn as nn
-from KSDD2.attention.eca import ECAAttention
+from attention.eca import ECAAttention
 from attention.siman import SimAMAttention
 from models import _conv_block, Conv2d_init, FeatureNorm, GradientMultiplyLayer
 from CFPNet import CFPNetMed
@@ -43,7 +43,12 @@ class LizNet(nn.Module):
                                        nn.MaxPool2d(kernel_size=2),
                                        _conv_block(in_chanels=16, out_chanels=32, kernel_size=5, padding=2))
 
-        self.fc = nn.Linear(in_features=66, out_features=classes)
+        self.fc = nn.Sequential(
+            nn.Linear(in_features=66, out_features=128),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(in_features=128, out_features=classes),
+        )
 
         self.volume_lr_multiplier_layer = GradientMultiplyLayer().apply
         self.glob_max_lr_multiplier_layer = GradientMultiplyLayer().apply
@@ -62,14 +67,14 @@ class LizNet(nn.Module):
             seg_mask, volume = self.volume(x)
             seg_mask = self.seg_mask(seg_mask)
         else:
-            volume = self.volume(x)
-            seg_mask = self.seg_mask(volume)
+            volume = self.volume(x) # 28.0
+            seg_mask = self.seg_mask(volume) # 28.0
 
-        cat = torch.cat([volume, seg_mask], dim=1)
+        cat = torch.cat([volume, seg_mask], dim=1) # 28.2
 
         cat = self.volume_lr_multiplier_layer(cat, self.volume_lr_multiplier_mask)
 
-        features = self.extractor(cat)
+        features = self.extractor(cat) # 28.4
         global_max_feat = torch.max(torch.max(features, dim=-1, keepdim=True)[0], dim=-2, keepdim=True)[0]
         global_avg_feat = torch.mean(features, dim=(-1, -2), keepdim=True)
         global_max_seg = torch.max(torch.max(seg_mask, dim=-1, keepdim=True)[0], dim=-2, keepdim=True)[0]

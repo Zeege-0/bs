@@ -197,9 +197,9 @@ class End2End:
             end = timer()
             pbar.close()
 
-            epoch_loss_seg = epoch_loss_seg / samples_per_epoch
-            epoch_loss_dec = epoch_loss_dec / samples_per_epoch
-            epoch_loss = epoch_loss / samples_per_epoch
+            epoch_loss_seg = epoch_loss_seg / len(train_loader)
+            epoch_loss_dec = epoch_loss_dec / len(train_loader)
+            epoch_loss = epoch_loss / len(train_loader)
             losses.append((epoch_loss_seg, epoch_loss_dec, epoch_loss, epoch))
 
             self._log(
