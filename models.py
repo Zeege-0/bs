@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from torch.nn import init
 from CFPNetOrigin import CFPEncoder
+from attention.siman import SimAM
 
 BATCHNORM_TRACK_RUNNING_STATS = False
 BATCHNORM_MOVING_AVERAGE_DECAY = 0.9997
@@ -29,6 +30,7 @@ class Conv2d_init(nn.Conv2d):
 def _conv_block(in_chanels, out_chanels, kernel_size, padding):
     return nn.Sequential(Conv2d_init(in_channels=in_chanels, out_channels=out_chanels,
                                      kernel_size=kernel_size, padding=padding, bias=False),
+                         SimAM(),
                          FeatureNorm(num_features=out_chanels, eps=0.001),
                          nn.ReLU())
 

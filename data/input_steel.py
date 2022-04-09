@@ -3,6 +3,7 @@ import numpy as np
 from data.dataset import Dataset
 import pickle
 import pandas as pd
+from tqdm import trange
 
 
 def read_split(train_num: int, num_segmented: int, kind: str):
@@ -33,10 +34,24 @@ class SteelDataset(Dataset):
     def __init__(self, kind, cfg):
         super(SteelDataset, self).__init__(cfg.DATASET_PATH, cfg, kind)
         self.read_contents()
+        print(f"Preloading STEEL {kind} dataset")
+        # self.preload()
 
+    def preload(self):
+        self.cfg.ON_DEMAND_READ = True
+        real_pos_samples = []
+        real_neg_samples = []
+        for i in trange(self.num_neg + self.num_pos, ncols=80):
+            image, claz, seg_mask, seg_loss_mask, is_segmented, sample_name = self[i]
+            if claz == 1:
+                real_pos_samples.append((image, seg_mask, seg_loss_mask, is_segmented, None, None, sample_name))
+            else:
+                real_neg_samples.append((image, seg_mask, seg_loss_mask, is_segmented, None, None, sample_name))
+        self.cfg.ON_DEMAND_READ = False
+        self.pos_samples = real_pos_samples
+        self.neg_samples = real_neg_samples
+    
     def read_contents(self):
-        if not self.cfg.ON_DEMAND_READ:
-            raise Exception("Need to implement eager loading!")
 
         pos_samples, neg_samples = [], []
 

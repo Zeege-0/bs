@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from attention.siman import SimAM
+
 __all__ = ["CFPNet"]
 
 class DeConv(nn.Module):
@@ -28,7 +30,7 @@ class DeConv(nn.Module):
     
 
 class Conv(nn.Module):
-    def __init__(self, nIn, nOut, kSize, stride, padding, dilation=(1, 1), groups=1, bn_acti=False, bias=False):
+    def __init__(self, nIn, nOut, kSize, stride, padding, dilation=(1, 1), groups=1, bn_acti=False, bias=False, attention=None):
         super().__init__()
 
         self.bn_acti = bn_acti
@@ -37,11 +39,18 @@ class Conv(nn.Module):
                               stride=stride, padding=padding,
                               dilation=dilation, groups=groups, bias=bias)
 
+        if attention == 'siman':
+            self.attention = SimAM()
+        else:
+            self.attention = None
+
         if self.bn_acti:
             self.bn_prelu = BNPReLU(nOut)
 
-    def forward(self, input):
-        output = self.conv(input)
+    def forward(self, x):
+        output = self.conv(x)
+        if self.attention is not None:
+            output = self.attention(output)
 
         if self.bn_acti:
             output = self.bn_prelu(output)
@@ -134,9 +143,9 @@ class CFPModule(nn.Module):
         self.dconv1x3_3_3 = Conv(nIn // 8, nIn // 8, (1, dkSize), 1,
                               padding=(0, int(d/2+1)), dilation=(1,int(d/2+1)),groups = nIn //8, bn_acti=True)              
         
-        self.conv1x1 = Conv(nIn, nIn, 1, 1, padding=0,bn_acti=False)
+        self.conv1x1 = Conv(nIn, nIn, 1, 1, padding=0, bn_acti=False, attention='siman')
         
-    def forward(self, input, streams):
+    def forward(self, input):
         inp = self.bn_relu_1(input)
         inp = self.conv1x1_1(inp)
         
@@ -197,7 +206,7 @@ class DownSamplingBlock(nn.Module):
         else:
             nConv = nOut
 
-        self.conv3x3 = Conv(nIn, nConv, kSize=3, stride=2, padding=1)
+        self.conv3x3 = Conv(nIn, nConv, kSize=3, stride=2, padding=1, attention='siman')
         self.max_pool = nn.MaxPool2d(2, stride=2)
         self.bn_prelu = BNPReLU(nOut)
 
@@ -233,7 +242,7 @@ class CFPEncoder(nn.Module):
         self.init_conv = nn.Sequential(
             Conv(img_channels, 32, 3, 2, padding=1, bn_acti=True),
             Conv(32, 32, 3, 1, padding=1, bn_acti=True),
-            Conv(32, 32, 3, 1, padding=1, bn_acti=True),
+            Conv(32, 32, 3, 1, padding=1, bn_acti=True, attention='siman'),
         )
 
         self.down_1 = InputInjection(1)  # down-sample the image 1 times

@@ -1,3 +1,4 @@
+from multiprocessing import Pool
 import matplotlib
 
 matplotlib.use("Agg")
@@ -14,6 +15,8 @@ from data.dataset_catalog import get_dataset
 import random
 import cv2
 from config import Config
+from tqdm import tqdm
+from timeit import default_timer as timer
 from torch.utils.tensorboard import SummaryWriter
 from sam import SAM, enable_running_stats, disable_running_stats
 
@@ -168,8 +171,8 @@ class End2End:
 
             epoch_loss_seg, epoch_loss_dec, epoch_loss = 0, 0, 0
             epoch_correct = 0
-            from timeit import default_timer as timer
 
+            pbar = tqdm(total=len(train_loader), ncols=80)
             time_acc = 0
             start = timer()
             for iter_index, (data) in enumerate(train_loader):
@@ -187,10 +190,12 @@ class End2End:
                 epoch_loss_seg += curr_loss_seg
                 epoch_loss_dec += curr_loss_dec
                 epoch_loss += curr_loss
-
                 epoch_correct += correct
 
+                pbar.update(1)
+
             end = timer()
+            pbar.close()
 
             epoch_loss_seg = epoch_loss_seg / samples_per_epoch
             epoch_loss_dec = epoch_loss_dec / samples_per_epoch
@@ -228,11 +233,18 @@ class End2End:
         res = []
         predictions, ground_truths = [], []
 
-        for data_point in eval_loader:
+        pbar = tqdm(total=len(eval_loader), ncols=80)
+        time_acc = 0
+        for iii, (data_point) in enumerate(eval_loader):
             image, claz, seg_mask, seg_loss_mask, _, sample_name = data_point
             image, seg_mask = image.to(device), seg_mask.to(device)
             is_pos = (seg_mask.max() > 0).reshape((1, 1)).to(device).item()
+
+            start = timer()
             prediction, pred_seg = model(image)
+            end = timer()
+            time_acc = time_acc + (end - start)
+
             pred_seg = nn.Sigmoid()(pred_seg)
             prediction = nn.Sigmoid()(prediction)
 
@@ -255,6 +267,9 @@ class End2End:
                         utils.plot_sample(sample_name[0], image, pred_seg, seg_loss_mask, save_folder, decision=prediction, plot_seg=plot_seg)
                     else:
                         utils.plot_sample(sample_name[0], image, pred_seg, seg_mask, save_folder, decision=prediction, plot_seg=plot_seg)
+            pbar.update(1)
+            pbar.set_postfix({"fps": iii / time_acc})
+        pbar.close()
 
         if is_validation:
             metrics = utils.get_metrics(np.array(ground_truths), np.array(predictions))
