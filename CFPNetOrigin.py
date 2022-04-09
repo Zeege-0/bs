@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from attention.siman import SimAM
+from attention.siman import SimAMAttention
 
 __all__ = ["CFPNet"]
 
@@ -40,7 +40,7 @@ class Conv(nn.Module):
                               dilation=dilation, groups=groups, bias=bias)
 
         if attention == 'siman':
-            self.attention = SimAM()
+            self.attention = SimAMAttention()
         else:
             self.attention = None
 

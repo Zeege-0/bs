@@ -1,7 +1,8 @@
 import math
 import torch
 import torch.nn as nn
-from attention.siman import SimAM
+from KSDD2.attention.eca import ECAAttention
+from attention.siman import SimAMAttention
 from models import _conv_block, Conv2d_init, FeatureNorm, GradientMultiplyLayer
 from CFPNet import CFPNetMed
 from CFPNetOrigin import CFPEncoder, Conv
@@ -31,18 +32,16 @@ class LizNet(nn.Module):
             self.volume = CFPEncoder(input_channels)
             self.seg_mask = nn.Sequential(
                 Conv2d_init(in_channels=256 + input_channels, out_channels=1, kernel_size=1, padding=0, bias=False),
-                SimAM(),
+                SimAMAttention(),
                 FeatureNorm(num_features=1, eps=0.001, include_bias=False))
 
         self.extractor = nn.Sequential(nn.MaxPool2d(kernel_size=2),
-                                       Conv(nIn=257 + input_channels, nOut=8, kSize=3, stride=1, padding=1, bn_acti=True, attention='siman'),
-                                    #    _conv_block(in_chanels=257 + input_channels, out_chanels=8, kernel_size=5, padding=2),
+                                    #    ECAAttention(257 + input_channels),
+                                       _conv_block(in_chanels=257 + input_channels, out_chanels=8, kernel_size=5, padding=2),
                                        nn.MaxPool2d(kernel_size=2),
-                                       Conv(nIn=8, nOut=16, kSize=3, stride=1, padding=1, bn_acti=True, attention='siman'),
-                                    #    _conv_block(in_chanels=8, out_chanels=16, kernel_size=5, padding=2),
+                                       _conv_block(in_chanels=8, out_chanels=16, kernel_size=5, padding=2),
                                        nn.MaxPool2d(kernel_size=2),
-                                        Conv(nIn=16, nOut=32, kSize=3, stride=1, padding=1, bn_acti=True, attention='siman'))
-                                    #    _conv_block(in_chanels=16, out_chanels=32, kernel_size=5, padding=2))
+                                       _conv_block(in_chanels=16, out_chanels=32, kernel_size=5, padding=2))
 
         self.fc = nn.Linear(in_features=66, out_features=classes)
 

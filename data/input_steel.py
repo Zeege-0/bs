@@ -35,7 +35,7 @@ class SteelDataset(Dataset):
         super(SteelDataset, self).__init__(cfg.DATASET_PATH, cfg, kind)
         self.read_contents()
         print(f"Preloading STEEL {kind} dataset")
-        # self.preload()
+        self.preload()
 
     def preload(self):
         self.cfg.ON_DEMAND_READ = True

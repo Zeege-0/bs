@@ -5,9 +5,9 @@ import torch
 import torch.nn as nn
 
 
-class SimAM(nn.Module):
+class SimAMAttention(nn.Module):
     def __init__(self, channels = None, e_lambda = 1e-4):
-        super(SimAM, self).__init__()
+        super(SimAMAttention, self).__init__()
 
         self.activaton = nn.Sigmoid()
         self.e_lambda = e_lambda
@@ -34,7 +34,7 @@ class SimAM(nn.Module):
 
 
 def main():
-    attention_block = SimAM()
+    attention_block = SimAMAttention()
     input = torch.ones([4, 64, 32, 32])
     output = attention_block(input)
     print(input.size(), output.size())
