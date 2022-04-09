@@ -136,7 +136,7 @@ class CFPModule(nn.Module):
         
         self.conv1x1 = Conv(nIn, nIn, 1, 1, padding=0,bn_acti=False)
         
-    def forward(self, input):
+    def forward(self, input, streams):
         inp = self.bn_relu_1(input)
         inp = self.conv1x1_1(inp)
         
@@ -231,7 +231,7 @@ class CFPEncoder(nn.Module):
     def __init__(self, img_channels, block_1=2, block_2=6):
         super().__init__()
         self.init_conv = nn.Sequential(
-            Conv(3, 32, 3, 2, padding=1, bn_acti=True),
+            Conv(img_channels, 32, 3, 2, padding=1, bn_acti=True),
             Conv(32, 32, 3, 1, padding=1, bn_acti=True),
             Conv(32, 32, 3, 1, padding=1, bn_acti=True),
         )
@@ -246,12 +246,13 @@ class CFPEncoder(nn.Module):
         self.downsample_1 = DownSamplingBlock(32 + img_channels, 64)
         self.CFP_Block_1 = nn.Sequential()
         for i in range(0, block_1):
-            self.CFP_Block_1.add_module("CFP_Module_1_" + str(i), CFPModule(64, d=dilation_block_1[i]))
+            self.CFP_Block_1.add_module("CFP_Module_1_" + str(i), 
+                                        CFPModule(64, d=dilation_block_1[i]))
             
         self.bn_prelu_2 = BNPReLU(128 + img_channels)
 
         # CFP Block 2
-        dilation_block_2 = [4, 4, 8, 16] #camvid #cityscapes [4,4,8,8,16,16] # [4,8,16]
+        dilation_block_2 = [4, 4, 8, 8, 16, 16] #camvid #cityscapes [4,4,8,8,16,16] # [4,8,16]
         self.downsample_2 = DownSamplingBlock(128 + img_channels, 128)
         self.CFP_Block_2 = nn.Sequential()
         for i in range(0, block_2):
@@ -298,7 +299,7 @@ class CFPNet(nn.Module):
         self.down_3 = InputInjection(3)  # down-sample the image 3 times
 
         self.bn_prelu_1 = BNPReLU(32 + 3)
-        dilation_block_1 =[2, 2]
+        dilation_block_1 =[1, 3]
         # CFP Block 1
         self.downsample_1 = DownSamplingBlock(32 + 3, 64)
         self.CFP_Block_1 = nn.Sequential()

@@ -94,12 +94,7 @@ class End2End:
             seg_loss_masks_ = seg_loss_masks[start_idx:end_idx, :, :, :].to(device)
             is_pos_ = claz[start_idx:end_idx].to(device)
             is_segmented_ = is_segmented[start_idx:end_idx].to(device)
-
-            if tensorboard_writer is not None and iter_index % 100 == 0:
-                tensorboard_writer.add_image(f"{iter_index}/image", images_[0, :, :, :])
-                tensorboard_writer.add_image(f"{iter_index}/seg_mask", seg_masks[0, :, :, :])
-                tensorboard_writer.add_image(f"{iter_index}/seg_loss_mask", seg_loss_masks_[0, :, :, :])
-
+            
             decision, output_seg_mask = model(images_)
 
             # fake label for non segmented images

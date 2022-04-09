@@ -7,7 +7,7 @@ import pandas as pd
 
 def read_split(train_num: int, num_segmented: int, kind: str):
     fn = f"STEEL/split_{train_num}_{num_segmented}.pyb"
-    with open(f"splits/{fn}", "rb") as f:
+    with open(f"/mnt/sdb1/home/zeege/remote/bs/KSDD2/splits/{fn}", "rb") as f:
         train_samples, test_samples, validation_samples = pickle.load(f)
         if kind == 'TRAIN':
             return train_samples
