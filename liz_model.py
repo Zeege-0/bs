@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from attention.eca import ECAAttention
 from attention.siman import SimAMAttention
+from attention.resnet import BasicBlock, ResLayer
 from models import _conv_block, Conv2d_init, FeatureNorm, GradientMultiplyLayer
 from CFPNet import CFPNetMed
 from CFPNetOrigin import CFPEncoder, Conv
@@ -34,20 +35,26 @@ class LizNet(nn.Module):
                 Conv2d_init(in_channels=256 + input_channels, out_channels=1, kernel_size=1, padding=0, bias=False),
                 SimAMAttention(),
                 FeatureNorm(num_features=1, eps=0.001, include_bias=False))
+        
+        self.extractor = nn.Sequential(
+            nn.MaxPool2d(kernel_size=2),
+            ResLayer(BasicBlock, 257 + input_channels, 32, 2, 1),
+            ResLayer(BasicBlock, 32, 64, 2, 1),
+            ResLayer(BasicBlock, 64, 128, 2, 1),
+        )
 
-        self.extractor = nn.Sequential(nn.MaxPool2d(kernel_size=2),
-                                    #    ECAAttention(257 + input_channels),
-                                       _conv_block(in_chanels=257 + input_channels, out_chanels=8, kernel_size=5, padding=2),
-                                       nn.MaxPool2d(kernel_size=2),
-                                       _conv_block(in_chanels=8, out_chanels=16, kernel_size=5, padding=2),
-                                       nn.MaxPool2d(kernel_size=2),
-                                       _conv_block(in_chanels=16, out_chanels=32, kernel_size=5, padding=2))
+        # self.extractor = nn.Sequential(nn.MaxPool2d(kernel_size=2),
+        #                                _conv_block(in_chanels=64, out_chanels=128, kernel_size=5, padding=2),
+        #                                nn.MaxPool2d(kernel_size=2),
+        #                                _conv_block(in_chanels=128, out_chanels=256, kernel_size=5, padding=2),
+        #                                nn.MaxPool2d(kernel_size=2),
+        #                                _conv_block(in_chanels=256, out_chanels=512, kernel_size=5, padding=2))
 
         self.fc = nn.Sequential(
-            nn.Linear(in_features=66, out_features=128),
+            nn.Linear(in_features=258, out_features=64),
             nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(in_features=128, out_features=classes),
+            nn.Dropout(0.3),
+            nn.Linear(in_features=64, out_features=classes),
         )
 
         self.volume_lr_multiplier_layer = GradientMultiplyLayer().apply

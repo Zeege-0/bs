@@ -193,6 +193,7 @@ class End2End:
                 epoch_correct += correct
 
                 pbar.update(1)
+                pbar.set_postfix({'correct': f"{epoch_correct}/{(iter_index + 1) * self.cfg.BATCH_SIZE}"})
 
             end = timer()
             pbar.close()
@@ -243,7 +244,8 @@ class End2End:
             start = timer()
             prediction, pred_seg = model(image)
             end = timer()
-            time_acc = time_acc + (end - start)
+            if iii > 1:
+                time_acc = time_acc + (end - start)
 
             pred_seg = nn.Sigmoid()(pred_seg)
             prediction = nn.Sigmoid()(prediction)
@@ -295,10 +297,13 @@ class End2End:
 
     def get_loss_weights(self, epoch):
         total_epochs = float(self.cfg.EPOCHS)
+        alpha = 0.3
 
         if self.cfg.DYN_BALANCED_LOSS:
             seg_loss_weight = 1 - (epoch / total_epochs)
+            seg_loss_weight = seg_loss_weight / 2 + alpha
             dec_loss_weight = self.cfg.DELTA_CLS_LOSS * (epoch / total_epochs)
+            dec_loss_weight = dec_loss_weight / 2 + alpha
         else:
             seg_loss_weight = 1
             dec_loss_weight = self.cfg.DELTA_CLS_LOSS

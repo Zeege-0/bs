@@ -53,11 +53,11 @@ class CFPModule(nn.Module):
         :param ksize: kernel size
         """
         super().__init__()
-        self.x_inp = ConvBN(filters, filters // 4, ksize=3, dilation=dilation)
-        self.x_1 = FPChannel(filters // 4, ksize=3, dilation=dilation)
-        self.x_2 = FPChannel(filters // 4, ksize=3, dilation=dilation // 4 + 1)
-        self.x_3 = FPChannel(filters // 4, ksize=3, dilation=dilation // 2 + 1)
-        self.x_4 = FPChannel(filters // 4, ksize=3, dilation=dilation + 1)
+        self.x_inp = ConvBN(filters, filters // 4, ksize=3, dilation=dilation, groups=filters // 16)
+        self.x_1 = FPChannel(filters // 4, ksize=3, dilation=dilation, groups=filters // 16)
+        self.x_2 = FPChannel(filters // 4, ksize=3, dilation=dilation // 4 + 1, groups=filters // 16)
+        self.x_3 = FPChannel(filters // 4, ksize=3, dilation=dilation // 2 + 1, groups=filters // 16)
+        self.x_4 = FPChannel(filters // 4, ksize=3, dilation=dilation + 1, groups=filters // 16)
         self.bn = nn.BatchNorm2d(filters, eps=1e-3)
         self.conv = ConvBN(filters, filters, ksize=1, dilation=1, stride=1)
 
