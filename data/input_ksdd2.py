@@ -4,6 +4,7 @@ import pickle
 import os
 from data.dataset import Dataset
 from config import Config
+from tqdm import tqdm
 
 
 def read_split(num_segmented: int, kind: str):
@@ -21,6 +22,7 @@ def read_split(num_segmented: int, kind: str):
 class KSDD2Dataset(Dataset):
     def __init__(self, kind: str, cfg: Config):
         super(KSDD2Dataset, self).__init__(cfg.DATASET_PATH, cfg, kind)
+        print(f"Loading KSDD2 {kind} dataset...")
         self.read_contents()
 
     def read_contents(self):
@@ -28,6 +30,7 @@ class KSDD2Dataset(Dataset):
 
         data_points = read_split(self.cfg.NUM_SEGMENTED, self.kind)
 
+        pbar = tqdm(total=len(data_points), ncols=80)
         for part, is_segmented in data_points:
             image_path = os.path.join(self.path, self.kind.lower(), f"{part}.png")
             seg_mask_path = os.path.join(self.path, self.kind.lower(), f"{part}_GT.png")
@@ -46,6 +49,9 @@ class KSDD2Dataset(Dataset):
                 seg_loss_mask = self.to_tensor(self.downsize(np.ones_like(seg_mask)))
                 seg_mask = self.to_tensor(self.downsize(seg_mask))
                 neg_samples.append((image, seg_mask, seg_loss_mask, True, image_path, seg_mask_path, part))
+            
+            pbar.update(1)
+        pbar.close()
 
         self.pos_samples = pos_samples
         self.neg_samples = neg_samples

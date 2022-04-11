@@ -36,6 +36,8 @@ class LizNet(nn.Module):
                 SimAMAttention(),
                 FeatureNorm(num_features=1, eps=0.001, include_bias=False))
         
+        
+
         self.extractor = nn.Sequential(
             nn.MaxPool2d(kernel_size=2),
             ResLayer(BasicBlock, 257 + input_channels, 32, 2, 1),

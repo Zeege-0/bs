@@ -17,6 +17,8 @@ import cv2
 from config import Config
 from tqdm import tqdm
 from timeit import default_timer as timer
+from torch import autocast
+from torch.cuda.amp.grad_scaler import GradScaler
 from torch.utils.tensorboard import SummaryWriter
 from sam import SAM, enable_running_stats, disable_running_stats
 
@@ -54,6 +56,7 @@ class End2End:
         device = self._get_device()
         model = self._get_model().to(device)
         optimizer = self._get_optimizer(model)
+        scaler = GradScaler()
         loss_seg, loss_dec = self._get_loss(True), self._get_loss(False)
 
         train_loader = get_dataset("TRAIN", self.cfg)
@@ -62,7 +65,7 @@ class End2End:
         tensorboard_writer = SummaryWriter(log_dir=self.tensorboard_path) if WRITE_TENSORBOARD else None
 
         self._log("Starting training")
-        train_results = self._train_model(device, model, train_loader, loss_seg, loss_dec, optimizer, validation_loader, tensorboard_writer)
+        train_results = self._train_model(device, model, train_loader, loss_seg, loss_dec, optimizer, scaler, validation_loader, tensorboard_writer)
         self._save_train_results(train_results)
         self._save_model(model)
 
@@ -75,7 +78,7 @@ class End2End:
         test_loader = get_dataset("TEST", self.cfg)
         self.eval_model(device, model, test_loader, save_folder=self.outputs_path, save_images=save_images, is_validation=False, plot_seg=plot_seg)
 
-    def training_iteration(self, data, device, model, criterion_seg, criterion_dec, optimizer, weight_loss_seg, weight_loss_dec,
+    def training_iteration(self, data, device, model, criterion_seg, criterion_dec, optimizer, scaler, weight_loss_seg, weight_loss_dec,
                            tensorboard_writer, iter_index):
         images, claz, seg_masks, seg_loss_masks, is_segmented, _ = data
 
@@ -86,39 +89,40 @@ class End2End:
         total_correct = 0
         total_loss_seg = 0
         total_loss_dec = 0
-
+        
         # Start loss function
         def loss_function(is_first_step, idx):
-            start_idx = idx * memory_fit
-            end_idx = min(batch_size, (idx + 1) * memory_fit)
+            with autocast('cuda', enabled=self.cfg.USE_MIX):
+                start_idx = idx * memory_fit
+                end_idx = min(batch_size, (idx + 1) * memory_fit)
 
-            images_ = images[start_idx:end_idx, :, :, :].to(device)
-            seg_masks_ = seg_masks[start_idx:end_idx, :, :, :].to(device)
-            seg_loss_masks_ = seg_loss_masks[start_idx:end_idx, :, :, :].to(device)
-            is_pos_ = claz[start_idx:end_idx].to(device)
-            is_segmented_ = is_segmented[start_idx:end_idx].to(device)
-            
-            decision, output_seg_mask = model(images_)
+                images_ = images[start_idx:end_idx, :, :, :].to(device)
+                seg_masks_ = seg_masks[start_idx:end_idx, :, :, :].to(device)
+                seg_loss_masks_ = seg_loss_masks[start_idx:end_idx, :, :, :].to(device)
+                is_pos_ = claz[start_idx:end_idx].to(device)
+                is_segmented_ = is_segmented[start_idx:end_idx].to(device)
+                
+                decision, output_seg_mask = model(images_)
 
-            # fake label for non segmented images
-            non_segmented_mask = ((is_segmented_ == False) & is_pos_.type(torch.bool))
-            seg_masks_[non_segmented_mask] = 1
-            output_seg_mask[non_segmented_mask] = torch.inf
+                # fake label for non segmented images
+                non_segmented_mask = ((is_segmented_ == False) & is_pos_.type(torch.bool))
+                seg_masks_[non_segmented_mask] = 1
+                output_seg_mask[non_segmented_mask] = torch.Tensor([np.finfo(np.float32).max])
 
-            if self.cfg.WEIGHTED_SEG_LOSS:
-                loss_seg = torch.mean(criterion_seg(output_seg_mask, seg_masks_) * seg_loss_masks_)
-            else:
-                loss_seg = criterion_seg(output_seg_mask, seg_masks_)
+                if self.cfg.WEIGHTED_SEG_LOSS:
+                    loss_seg = torch.mean(criterion_seg(output_seg_mask, seg_masks_) * seg_loss_masks_)
+                else:
+                    loss_seg = criterion_seg(output_seg_mask, seg_masks_)
 
-            loss_dec = criterion_dec(decision, is_pos_.type_as(decision).reshape((memory_fit, 1)))
-            loss = weight_loss_seg * loss_seg + weight_loss_dec * loss_dec
+                loss_dec = criterion_dec(decision, is_pos_.type_as(decision).reshape((memory_fit, 1)))
+                loss = weight_loss_seg * loss_seg + weight_loss_dec * loss_dec
 
-            if is_first_step:
-                _total_loss_seg = loss_seg.item()
-                _total_loss_dec = loss_dec.item()
-                _total_correct = ((decision.reshape((memory_fit,)) > 0.0) == is_pos_).sum().item()
-                _total_loss = loss.item()
-                return loss, _total_loss, _total_correct, _total_loss_seg, _total_loss_dec
+                if is_first_step:
+                    _total_loss_seg = loss_seg.item()
+                    _total_loss_dec = loss_dec.item()
+                    _total_correct = ((decision.reshape((memory_fit,)) > 0.0) == is_pos_).sum().item()
+                    _total_loss = loss.item()
+                    return loss, _total_loss, _total_correct, _total_loss_seg, _total_loss_dec
             
             return loss
         # End loss function
@@ -126,7 +130,7 @@ class End2End:
         if not self.cfg.USE_SAM:
             optimizer.zero_grad()
         else:
-             enable_running_stats(model)
+            enable_running_stats(model)
 
         # First pass
         loss, tl, tc, tls, tld = loss_function(True, 0)
@@ -134,10 +138,17 @@ class End2End:
         total_correct += tc
         total_loss_seg += tls
         total_loss_dec += tld
+        # if self.cfg.USE_MIX:
+        #     scaler.scale(loss).backward()
+        # else:
         loss.backward()
 
         # Backward and optimize
         if not self.cfg.USE_SAM:
+            # if self.cfg.USE_MIX:
+            #     scaler.step(optimizer)
+            #     scaler.update()
+            # else:
             optimizer.step()
             optimizer.zero_grad()
         else:
@@ -148,7 +159,7 @@ class End2End:
 
         return total_loss_seg, total_loss_dec, total_loss, total_correct
 
-    def _train_model(self, device, model: nn.Module, train_loader, criterion_seg, criterion_dec, optimizer, validation_set, tensorboard_writer):
+    def _train_model(self, device, model: nn.Module, train_loader, criterion_seg, criterion_dec, optimizer, scaler, validation_set, tensorboard_writer):
         losses = []
         validation_data = []
         max_validation = -1
@@ -180,7 +191,9 @@ class End2End:
                 curr_loss_seg, curr_loss_dec, curr_loss, correct = self.training_iteration(data, device, model,
                                                                                            criterion_seg,
                                                                                            criterion_dec,
-                                                                                           optimizer, weight_loss_seg,
+                                                                                           optimizer, 
+                                                                                           scaler,
+                                                                                           weight_loss_seg,
                                                                                            weight_loss_dec,
                                                                                            tensorboard_writer, (epoch * samples_per_epoch + iter_index))
 
@@ -227,51 +240,53 @@ class End2End:
         return losses, validation_data
 
     def eval_model(self, device, model, eval_loader, save_folder, save_images, is_validation, plot_seg):
-        model.eval()
+        with torch.no_grad():
+            model.eval()
 
-        dsize = self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT
+            dsize = self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT
 
-        res = []
-        predictions, ground_truths = [], []
+            res = []
+            predictions, ground_truths = [], []
 
-        pbar = tqdm(total=len(eval_loader), ncols=80)
-        time_acc = 0
-        for iii, (data_point) in enumerate(eval_loader):
-            image, claz, seg_mask, seg_loss_mask, _, sample_name = data_point
-            image, seg_mask = image.to(device), seg_mask.to(device)
-            is_pos = (seg_mask.max() > 0).reshape((1, 1)).to(device).item()
+            pbar = tqdm(total=len(eval_loader), ncols=80)
+            time_acc = 0
+            for iii, (data_point) in enumerate(eval_loader):
+                image, claz, seg_mask, seg_loss_mask, _, sample_name = data_point
+                image, seg_mask = image.to(device), seg_mask.to(device)
+                is_pos = (seg_mask.max() > 0).reshape((1, 1)).to(device).item()
 
-            start = timer()
-            prediction, pred_seg = model(image)
-            end = timer()
-            if iii > 1:
-                time_acc = time_acc + (end - start)
+                start = timer()
+                prediction, pred_seg = model(image)
+                end = timer()
+                if iii > 1:
+                    time_acc = time_acc + (end - start)
 
-            pred_seg = nn.Sigmoid()(pred_seg)
-            prediction = nn.Sigmoid()(prediction)
+                pred_seg = nn.Sigmoid()(pred_seg)
+                prediction = nn.Sigmoid()(prediction)
 
-            prediction = prediction.item()
-            image = image.detach().cpu().numpy()
-            pred_seg = pred_seg.detach().cpu().numpy()
-            seg_mask = seg_mask.detach().cpu().numpy()
+                prediction = prediction.item()
+                image = image.detach().cpu().numpy()
+                pred_seg = pred_seg.detach().cpu().numpy()
+                seg_mask = seg_mask.detach().cpu().numpy()
 
-            predictions.append(prediction)
-            ground_truths.append(is_pos)
-            res.append((prediction, None, None, is_pos, sample_name[0]))
-            if not is_validation:
-                if save_images:
-                    image = cv2.resize(np.transpose(image[0, :, :, :], (1, 2, 0)), dsize)
-                    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-                    pred_seg = cv2.resize(pred_seg[0, 0, :, :], dsize) if len(pred_seg.shape) == 4 else cv2.resize(pred_seg[0, :, :], dsize)
-                    seg_mask = cv2.resize(seg_mask[0, 0, :, :], dsize)
-                    if self.cfg.WEIGHTED_SEG_LOSS:
-                        seg_loss_mask = cv2.resize(seg_loss_mask.numpy()[0, 0, :, :], dsize)
-                        utils.plot_sample(sample_name[0], image, pred_seg, seg_loss_mask, save_folder, decision=prediction, plot_seg=plot_seg)
-                    else:
-                        utils.plot_sample(sample_name[0], image, pred_seg, seg_mask, save_folder, decision=prediction, plot_seg=plot_seg)
-            pbar.update(1)
-            pbar.set_postfix({"fps": iii / time_acc})
-        pbar.close()
+                predictions.append(prediction)
+                ground_truths.append(is_pos)
+                res.append((prediction, None, None, is_pos, sample_name[0]))
+                if not is_validation:
+                    if save_images:
+                        image = cv2.resize(np.transpose(image[0, :, :, :], (1, 2, 0)), dsize)
+                        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+                        pred_seg = cv2.resize(pred_seg[0, 0, :, :], dsize) if len(pred_seg.shape) == 4 else cv2.resize(pred_seg[0, :, :], dsize)
+                        seg_mask = cv2.resize(seg_mask[0, 0, :, :], dsize)
+                        if self.cfg.WEIGHTED_SEG_LOSS:
+                            seg_loss_mask = cv2.resize(seg_loss_mask.numpy()[0, 0, :, :], dsize)
+                            utils.plot_sample(sample_name[0], image, pred_seg, seg_loss_mask, save_folder, decision=prediction, plot_seg=plot_seg)
+                        else:
+                            utils.plot_sample(sample_name[0], image, pred_seg, seg_mask, save_folder, decision=prediction, plot_seg=plot_seg)
+                pbar.update(1)
+                if iii > 1:
+                    pbar.set_postfix({"fps": iii / time_acc})
+            pbar.close()
 
         if is_validation:
             metrics = utils.get_metrics(np.array(ground_truths), np.array(predictions))
@@ -369,9 +384,7 @@ class End2End:
 
     def _get_loss(self, is_seg):
         reduction = "none" if self.cfg.WEIGHTED_SEG_LOSS and is_seg else "mean"
-        def my_loss(pred, target):
-            return nn.BCELoss(reduction=reduction)(torch.sigmoid(pred), target)
-        return my_loss
+        return nn.BCEWithLogitsLoss(reduction=reduction)
 
     def _get_device(self):
         return f"cuda:{self.cfg.GPU}"
