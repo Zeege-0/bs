@@ -49,22 +49,22 @@ class Dataset(torch.utils.data.Dataset):
                 ix = index % self.num_pos
                 ix = self.neg_imgs_permutation[ix]
                 item = self.neg_samples[ix]
-                claz = 0.
+                claz = [1., 0.]
                 self.neg_retrieval_freq[ix] = self.neg_retrieval_freq[ix] + 1
 
             else:
                 ix = index
                 item = self.pos_samples[ix]
-                claz = 1.
+                claz = [0., 1.]
         else:
             if index < self.num_neg:
                 ix = index
                 item = self.neg_samples[ix]
-                claz = 0.
+                claz = [1., 0.]
             else:
                 ix = index - self.num_neg
                 item = self.pos_samples[ix]
-                claz = 1.
+                claz = [0., 1.]
 
         image, seg_mask, seg_loss_mask, is_segmented, image_path, seg_mask_path, sample_name = item
 

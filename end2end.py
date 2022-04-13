@@ -69,60 +69,53 @@ class End2End:
         self._save_train_results(train_results)
         self._save_model(model)
 
-        self.eval(model, device, self.cfg.SAVE_IMAGES, False, False)
+        self.test_model(model, device, self.cfg.SAVE_IMAGES, False, False)
 
         self._save_params()
 
-    def eval(self, model, device, save_images, plot_seg, reload_final):
+    def test_model(self, model, device, save_images, plot_seg, reload_final):
         self.reload_model(model, reload_final)
         test_loader = get_dataset("TEST", self.cfg)
         self.eval_model(device, model, test_loader, save_folder=self.outputs_path, save_images=save_images, is_validation=False, plot_seg=plot_seg)
 
     def training_iteration(self, data, device, model, criterion_seg, criterion_dec, optimizer, scaler, weight_loss_seg, weight_loss_dec,
                            tensorboard_writer, iter_index):
-        images, claz, seg_masks, seg_loss_masks, is_segmented, _ = data
-
-        batch_size = self.cfg.BATCH_SIZE
-        memory_fit = batch_size
-
-        total_loss = 0
-        total_correct = 0
-        total_loss_seg = 0
-        total_loss_dec = 0
+        _images, _claz, _seg_masks, _seg_loss_masks, _is_segmented, _ = data
         
         # Start loss function
-        def loss_function(is_first_step, idx):
+        def loss_function(is_first_step):
             with autocast('cuda', enabled=self.cfg.USE_MIX):
-                start_idx = idx * memory_fit
-                end_idx = min(batch_size, (idx + 1) * memory_fit)
 
-                images_ = images[start_idx:end_idx, :, :, :].to(device)
-                seg_masks_ = seg_masks[start_idx:end_idx, :, :, :].to(device)
-                seg_loss_masks_ = seg_loss_masks[start_idx:end_idx, :, :, :].to(device)
-                is_pos_ = claz[start_idx:end_idx].to(device)
-                is_segmented_ = is_segmented[start_idx:end_idx].to(device)
+                images = _images.to(device, non_blocking=True)
+                seg_masks = _seg_masks.to(device, non_blocking=True)
+                seg_loss_masks = _seg_loss_masks.to(device, non_blocking=True)
+                claz = torch.stack(_claz).T.to(device, non_blocking=True)
+                is_segmented = _is_segmented.to(device, non_blocking=True)
                 
-                decision, output_seg_mask = model(images_)
+                decision, output_seg_mask = model(images)
 
                 # fake label for non segmented images
-                non_segmented_mask = ((is_segmented_ == False) & is_pos_.type(torch.bool))
-                seg_masks_[non_segmented_mask] = 1
+                non_segmented_mask = ((is_segmented == False) & (claz[:, 0] == 1))
+                seg_masks[non_segmented_mask] = 1
                 output_seg_mask[non_segmented_mask] = torch.Tensor([np.finfo(np.float32).max])
 
                 if self.cfg.WEIGHTED_SEG_LOSS:
-                    loss_seg = torch.mean(criterion_seg(output_seg_mask, seg_masks_) * seg_loss_masks_)
+                    loss_seg = torch.mean(criterion_seg(output_seg_mask, seg_masks) * seg_loss_masks)
                 else:
-                    loss_seg = criterion_seg(output_seg_mask, seg_masks_)
+                    loss_seg = criterion_seg(output_seg_mask, seg_masks)
 
-                loss_dec = criterion_dec(decision, is_pos_.type_as(decision).reshape((memory_fit, 1)))
+                loss_dec = criterion_dec(decision, claz)
                 loss = weight_loss_seg * loss_seg + weight_loss_dec * loss_dec
 
                 if is_first_step:
+                    mts = utils.accuracy(decision, claz, train=True)
+                    _total_correct = int(mts['topk'][0] * self.cfg.BATCH_SIZE)
+                    _ap = mts['ap']
+                    _auroc = mts['auroc']
                     _total_loss_seg = loss_seg.item()
                     _total_loss_dec = loss_dec.item()
-                    _total_correct = ((decision.reshape((memory_fit,)) > 0.0) == is_pos_).sum().item()
                     _total_loss = loss.item()
-                    return loss, _total_loss, _total_correct, _total_loss_seg, _total_loss_dec
+                    return loss, _total_loss, _total_correct, _total_loss_seg, _total_loss_dec, _ap, _auroc
             
             return loss
         # End loss function
@@ -133,31 +126,26 @@ class End2End:
             enable_running_stats(model)
 
         # First pass
-        loss, tl, tc, tls, tld = loss_function(True, 0)
-        total_loss += tl
-        total_correct += tc
-        total_loss_seg += tls
-        total_loss_dec += tld
-        # if self.cfg.USE_MIX:
-        #     scaler.scale(loss).backward()
-        # else:
+        loss, tl, tc, tls, tld, tap, troc = loss_function(True)
+        total_correct = tc
+        total_auroc = troc
+        total_ap = tap
+        total_loss = tl
+        total_loss_seg = tls
+        total_loss_dec = tld
         loss.backward()
 
         # Backward and optimize
         if not self.cfg.USE_SAM:
-            # if self.cfg.USE_MIX:
-            #     scaler.step(optimizer)
-            #     scaler.update()
-            # else:
             optimizer.step()
             optimizer.zero_grad()
         else:
             optimizer.first_step(zero_grad=True)
             disable_running_stats(model)
-            loss_function(False, 0).backward()
+            loss_function(False).backward()
             optimizer.second_step(zero_grad=True)
 
-        return total_loss_seg, total_loss_dec, total_loss, total_correct
+        return total_loss_seg, total_loss_dec, total_loss, total_correct, total_ap, total_auroc
 
     def _train_model(self, device, model: nn.Module, train_loader, criterion_seg, criterion_dec, optimizer, scaler, validation_set, tensorboard_writer):
         losses = []
@@ -182,13 +170,16 @@ class End2End:
 
             epoch_loss_seg, epoch_loss_dec, epoch_loss = 0, 0, 0
             epoch_correct = 0
+            epoch_ap = 0
+            epoch_auroc = 0
 
-            pbar = tqdm(total=len(train_loader), ncols=80)
+            pbar = tqdm(total=len(train_loader), ncols=140)
             time_acc = 0
             start = timer()
             for iter_index, (data) in enumerate(train_loader):
+                pbar.set_description(f"Epoch {epoch + 1}/{num_epochs}")
                 start_1 = timer()
-                curr_loss_seg, curr_loss_dec, curr_loss, correct = self.training_iteration(data, device, model,
+                curr_loss_seg, curr_loss_dec, curr_loss, correct, ap, auroc = self.training_iteration(data, device, model,
                                                                                            criterion_seg,
                                                                                            criterion_dec,
                                                                                            optimizer, 
@@ -203,10 +194,19 @@ class End2End:
                 epoch_loss_seg += curr_loss_seg
                 epoch_loss_dec += curr_loss_dec
                 epoch_loss += curr_loss
-                epoch_correct += correct
-
+                epoch_correct += int(correct)
+                epoch_ap += ap
+                epoch_auroc += auroc
                 pbar.update(1)
-                pbar.set_postfix({'correct': f"{epoch_correct}/{(iter_index + 1) * self.cfg.BATCH_SIZE}"})
+                pbar.set_postfix({
+                    # 'time': f'{time_acc:.2f}s',
+                    'top1': f"{epoch_correct}/{(iter_index + 1) * self.cfg.BATCH_SIZE}",
+                    'ap': f"{(epoch_ap / (iter_index + 1)):.2f}",
+                    'auroc': f"{(epoch_auroc / (iter_index + 1)):.2f}",
+                    'seg': f"{(epoch_loss_seg / (iter_index + 1) ):.5f}",
+                    'dec': f"{(epoch_loss_dec / (iter_index + 1)):.5f}",
+                    'loss': f"{(epoch_loss / (iter_index + 1)):.5f}",
+                })
 
             end = timer()
             pbar.close()
@@ -216,8 +216,7 @@ class End2End:
             epoch_loss = epoch_loss / len(train_loader)
             losses.append((epoch_loss_seg, epoch_loss_dec, epoch_loss, epoch))
 
-            self._log(
-                f"Epoch {epoch + 1}/{num_epochs} ==> avg_loss_seg={epoch_loss_seg:.5f}, avg_loss_dec={epoch_loss_dec:.5f}, avg_loss={epoch_loss:.5f}, correct={epoch_correct}/{samples_per_epoch}, in {end - start:.2f}s/epoch (fwd/bck in {time_acc:.2f}s/epoch)")
+            # self._log(f"Epoch {epoch + 1}/{num_epochs} ==> avg_loss_seg={epoch_loss_seg:.5f}, avg_loss_dec={epoch_loss_dec:.5f}, avg_loss={epoch_loss:.5f}, correct={epoch_correct}/{samples_per_epoch}, in {end - start:.2f}s/epoch (fwd/bck in {time_acc:.2f}s/epoch)")
 
             if tensorboard_writer is not None:
                 tensorboard_writer.add_scalar("Loss/Train/segmentation", epoch_loss_seg, epoch)
@@ -226,8 +225,20 @@ class End2End:
                 tensorboard_writer.add_scalar("Accuracy/Train/", epoch_correct / samples_per_epoch, epoch)
 
             if self.cfg.VALIDATE and (epoch % validation_step == 0 or epoch == num_epochs - 1):
-                validation_ap, validation_accuracy, f1, FP, FN, TP, TN = self.eval_model(device, model, validation_set, None, False, True, False)
-                validation_data.append((validation_ap, epoch, f1, FP, FN, TP, TN))
+                mts = self.eval_model(device, model, validation_set, None, False, True, False)
+                validation_ap = mts['ap']
+                validation_accuracy = mts['topk'][0]
+                report = mts['report']
+                confu = mts['confusion']
+                validation_data.append((
+                    validation_ap, 
+                    epoch, 
+                    report['macro avg']['f1-score'], 
+                    confu[0][1], # FP
+                    confu[1][0], # FN
+                    confu[1][1], # TP
+                    confu[0][0] # TN
+                ))
 
                 if validation_ap > max_validation:
                     max_validation = validation_ap
@@ -243,17 +254,22 @@ class End2End:
         with torch.no_grad():
             model.eval()
 
-            dsize = self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT
+            res = {
+                'sample_names': [],
+                'decs': [],
+                'clazs': [],
+                'pred_segs': [],
+                'true_segs': [],
+            }
 
-            res = []
-            predictions, ground_truths = [], []
+            top1 = 0
 
             pbar = tqdm(total=len(eval_loader), ncols=80)
-            time_acc = 0
+            time_acc = 1e-10
             for iii, (data_point) in enumerate(eval_loader):
                 image, claz, seg_mask, seg_loss_mask, _, sample_name = data_point
-                image, seg_mask = image.to(device), seg_mask.to(device)
-                is_pos = (seg_mask.max() > 0).reshape((1, 1)).to(device).item()
+                image = image.to(device, non_blocking=True)
+                claz = torch.stack(claz).T
 
                 start = timer()
                 prediction, pred_seg = model(image)
@@ -264,39 +280,46 @@ class End2End:
                 pred_seg = nn.Sigmoid()(pred_seg)
                 prediction = nn.Sigmoid()(prediction)
 
-                prediction = prediction.item()
+                prediction = prediction.detach().cpu()
                 image = image.detach().cpu().numpy()
                 pred_seg = pred_seg.detach().cpu().numpy()
-                seg_mask = seg_mask.detach().cpu().numpy()
 
-                predictions.append(prediction)
-                ground_truths.append(is_pos)
-                res.append((prediction, None, None, is_pos, sample_name[0]))
-                if not is_validation:
-                    if save_images:
-                        image = cv2.resize(np.transpose(image[0, :, :, :], (1, 2, 0)), dsize)
-                        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-                        pred_seg = cv2.resize(pred_seg[0, 0, :, :], dsize) if len(pred_seg.shape) == 4 else cv2.resize(pred_seg[0, :, :], dsize)
-                        seg_mask = cv2.resize(seg_mask[0, 0, :, :], dsize)
-                        if self.cfg.WEIGHTED_SEG_LOSS:
-                            seg_loss_mask = cv2.resize(seg_loss_mask.numpy()[0, 0, :, :], dsize)
-                            utils.plot_sample(sample_name[0], image, pred_seg, seg_loss_mask, save_folder, decision=prediction, plot_seg=plot_seg)
-                        else:
-                            utils.plot_sample(sample_name[0], image, pred_seg, seg_mask, save_folder, decision=prediction, plot_seg=plot_seg)
+                res["sample_names"].extend(sample_name)
+                res["decs"].extend(prediction)
+                res["clazs"].extend(claz)
+                res["pred_segs"].extend(pred_seg)
+                res["true_segs"].extend(seg_mask)
+
+                mts = utils.accuracy(prediction, claz)
+                top1 += int(mts['topk'][0] * self.cfg.BATCH_SIZE)
+
                 pbar.update(1)
-                if iii > 1:
-                    pbar.set_postfix({"fps": iii / time_acc})
+                pbar.set_postfix({
+                    "FPS": iii / time_acc * len(sample_name),
+                    'Top1': f"{top1}/{(iii + 1) * self.cfg.BATCH_SIZE}"
+                })
             pbar.close()
 
-        if is_validation:
-            metrics = utils.get_metrics(np.array(ground_truths), np.array(predictions))
-            FP, FN, TP, TN = list(map(sum, [metrics["FP"], metrics["FN"], metrics["TP"], metrics["TN"]]))
-            self._log(f"VALIDATION || AUC={metrics['AUC']:f}, and AP={metrics['AP']:f}, with best thr={metrics['best_thr']:f} "
-                      f"at f-measure={metrics['best_f_measure']:.3f} and FP={FP:d}, FN={FN:d}, TOTAL SAMPLES={FP + FN + TP + TN:d}")
+        mts = utils.accuracy(torch.stack(res['decs']), torch.stack(res['clazs']))
+        confu = mts['confusion']
+        FP = confu[0][1]
+        FN = confu[1][0]
+        TP = confu[1][1]
+        TN = confu[0][0]
+        self._log(f"VALIDATION || AUROC: {mts['auroc']:.5f}, AP: {mts['ap']:.5f}, F1: {mts['report']['macro avg']['f1-score']:.3f}"
+                  f" || FP: {FP:d}, FN: {FN:d}, TP: {TP:d}, TN: {TN:d}")
+        
+        return mts
 
-            return metrics["AP"], metrics["accuracy"], metrics["best_f_measure"], FP, FN, TP, TN
-        else:
-            utils.evaluate_metrics(res, self.run_path, self.run_name)
+        # if is_validation:
+        #     metrics = utils.get_metrics(np.array(ground_truths), np.array(predictions))
+        #     FP, FN, TP, TN = list(map(sum, [metrics["FP"], metrics["FN"], metrics["TP"], metrics["TN"]]))
+        #     self._log(f"VALIDATION || AUC={metrics['AUC']:f}, and AP={metrics['AP']:f}, with best thr={metrics['best_thr']:f} "
+        #               f"at f-measure={metrics['best_f_measure']:.3f} and FP={FP:d}, FN={FN:d}, TOTAL SAMPLES={FP + FN + TP + TN:d}")
+
+        #     return metrics["AP"], metrics["accuracy"], metrics["best_f_measure"], FP, FN, TP, TN
+        # else:
+        #     utils.evaluate_metrics(res, self.run_path, self.run_name)
 
     def get_dec_gradient_multiplier(self):
         if self.cfg.GRADIENT_ADJUSTMENT:
@@ -410,7 +433,7 @@ class End2End:
 
     def _get_model(self):
         if self.cfg.MY:
-            seg_net = LizNet(self.cfg.USE_MED, self._get_device(), self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT, self.cfg.INPUT_CHANNELS)
+            seg_net = LizNet(self.cfg.USE_MED, self._get_device(), self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT, self.cfg.INPUT_CHANNELS, classes=2)
         else:
             seg_net = SegDecNet(self._get_device(), self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT, self.cfg.INPUT_CHANNELS)
         return seg_net

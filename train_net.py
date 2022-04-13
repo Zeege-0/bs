@@ -7,7 +7,7 @@ def str2bool(v):
     return v.lower() in ("yes", "true", "t", "1")
 
 
-def parse_args():
+def get_parser():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--MY', type=str2bool, required=True, help='Whether to use MY model')
@@ -53,14 +53,11 @@ def parse_args():
 
     parser.add_argument('--MEMORY_FIT', type=int, default=None, help="How many images can be fitted in GPU memory.")
     parser.add_argument('--SAVE_IMAGES', type=str2bool, default=None, help="Save test images or not.")
-
-    args = parser.parse_args()
-
-    return args
+    return parser
 
 
 if __name__ == '__main__':
-    args = parse_args()
+    args = get_parser().parse_args()
 
     configuration = Config()
     configuration.merge_from_args(args)

@@ -9,6 +9,45 @@ import os
 import errno
 import pickle
 import cv2
+import torch
+import sklearn
+from sklearn import metrics
+
+
+def accuracy(pred, label, topk=(1,), train=False):
+    with torch.no_grad():
+        ret = dict()
+
+        if isinstance(label, list):
+            label = torch.stack(label).t()
+
+        maxk = max(topk)
+        batch_size = label.size(0)
+
+        pred = pred.detach().cpu()
+        label = label.detach().cpu()
+
+        toppred = pred.topk(maxk, 1, True, True)[1].detach().cpu().t()
+        toplab = label.topk(maxk, 1, True, True)[1].detach().cpu().t()
+        correct = toppred.eq(toplab)
+        linpred = toppred.view(-1)
+        linlab = toplab.view(-1)
+
+        res = []
+        for k in topk:
+            correct_k = correct[:k].reshape(-1).float().sum(0, keepdim=True)
+            res.append(correct_k.div_(batch_size).item())
+        ret['topk'] = res
+        if linlab.max() != linlab.min():
+            ret['ap'] = metrics.average_precision_score(label, pred)
+            ret['auroc'] = metrics.roc_auc_score(label, pred)
+            if not train:
+                ret['confusion'] = metrics.confusion_matrix(linlab, linpred)
+                ret['report'] = metrics.classification_report(linlab, linpred, output_dict=True, zero_division=0)
+        else:
+            ret['ap'] = ret['topk'][0]
+            ret['auroc'] = ret['topk'][0]
+        return ret
 
 
 def create_folder(folder, exist_ok=True):
@@ -157,3 +196,27 @@ def get_metrics(labels, predictions):
     metrics['TP'] = TP
     metrics['accuracy'] = (sum(TP) + sum(TN)) / (sum(TP) + sum(TN) + sum(FP) + sum(FN))
     return metrics
+
+
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+    def __init__(self, name=None, fmt=':f'):
+        self.name = name
+        self.fmt = fmt
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+    def __str__(self):
+        fmtstr = "{name} {val" + self.fmt + "} ({avg" + self.fmt + "})"
+        return fmtstr.format(**self.__dict__)

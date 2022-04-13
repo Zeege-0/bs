@@ -43,10 +43,10 @@ class SteelDataset(Dataset):
         real_neg_samples = []
         for i in trange(self.num_neg + self.num_pos, ncols=80):
             image, claz, seg_mask, seg_loss_mask, is_segmented, sample_name = self[i]
-            if claz == 1:
-                real_pos_samples.append((image, seg_mask, seg_loss_mask, is_segmented, None, None, sample_name))
-            else:
+            if claz[0] == 1:
                 real_neg_samples.append((image, seg_mask, seg_loss_mask, is_segmented, None, None, sample_name))
+            else:
+                real_pos_samples.append((image, seg_mask, seg_loss_mask, is_segmented, None, None, sample_name))
         self.cfg.ON_DEMAND_READ = False
         self.pos_samples = real_pos_samples
         self.neg_samples = real_neg_samples
