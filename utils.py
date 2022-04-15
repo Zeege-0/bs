@@ -14,6 +14,46 @@ import sklearn
 from sklearn import metrics
 
 
+def jacard(y_pred, y_true, reduce=True):
+    assert (y_pred.shape == y_true.shape) and (y_pred.ndim >= 3)
+    N = y_pred.shape[0]
+    y_true_f = y_true.view(N, -1)
+    y_pred_f = y_pred.view(N, -1)
+    intersection = torch.sum(y_true_f * y_pred_f, dim=1)
+    union = torch.sum(y_true_f + y_pred_f - y_true_f * y_pred_f, dim=1)
+    ret = intersection / union
+    return ret.mean() if reduce else ret
+
+
+def dice_coef(y_pred, y_true, reduce=True):
+    assert (y_pred.shape == y_true.shape) and (y_pred.ndim >= 3)
+    N = y_pred.shape[0]
+    y_true_f = y_true.view(N, -1)
+    y_pred_f = y_pred.view(N, -1)
+    smooth = 1.0
+    intersection = torch.sum(y_true_f * y_pred_f, dim=1)
+    ret = (2. * intersection + smooth) / (torch.sum(y_true_f, dim=1) + torch.sum(y_pred_f, dim=1) + smooth)
+    return ret.mean() if reduce else ret
+
+
+def accuracy_seg(pred, label):
+    assert (pred.shape == label.shape) and (pred.ndim >= 3)
+    with torch.no_grad():
+        
+        ret = dict()
+        pred = pred.detach().cpu()
+        label = label.detach().cpu()
+        linpred = pred.flatten()
+        linlab = (label.flatten() > 0).type_as(linpred)
+
+        ret['ap'] = metrics.average_precision_score(linlab, linpred.flatten())
+        ret['auroc'] = metrics.roc_auc_score(linlab, linpred.flatten())
+        ret['dice'] = dice_coef(pred, label, True)
+        ret['jacard'] = jacard(pred, label, True)
+
+        return ret
+
+
 def accuracy(pred, label, topk=(1,), train=False):
     with torch.no_grad():
         ret = dict()

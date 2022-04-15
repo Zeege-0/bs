@@ -19,6 +19,7 @@ from tqdm import tqdm
 from timeit import default_timer as timer
 from torch import autocast
 from torch.cuda.amp.grad_scaler import GradScaler
+from glob import glob
 from torch.utils.tensorboard import SummaryWriter
 from sam import SAM, enable_running_stats, disable_running_stats
 
@@ -104,7 +105,7 @@ class End2End:
                 else:
                     loss_seg = criterion_seg(output_seg_mask, seg_masks)
 
-                loss_dec = criterion_dec(decision, claz)
+                loss_dec = criterion_dec(decision, claz.type_as(decision))
                 loss = weight_loss_seg * loss_seg + weight_loss_dec * loss_dec
 
                 if is_first_step:
@@ -159,8 +160,6 @@ class End2End:
         self.set_dec_gradient_multiplier(model, 0.0)
 
         for epoch in range(num_epochs):
-            if epoch % 5 == 0:
-                self._save_model(model, f"ep_{epoch:02}.pth")
 
             model.train()
 
@@ -173,11 +172,11 @@ class End2End:
             epoch_ap = 0
             epoch_auroc = 0
 
-            pbar = tqdm(total=len(train_loader), ncols=140)
+            pbar = tqdm(total=len(train_loader), ncols=140, bar_format="{desc} {bar}{r_bar}")
             time_acc = 0
             start = timer()
             for iter_index, (data) in enumerate(train_loader):
-                pbar.set_description(f"Epoch {epoch + 1}/{num_epochs}")
+                pbar.set_description(f"{epoch + 1}/{num_epochs}")
                 start_1 = timer()
                 curr_loss_seg, curr_loss_dec, curr_loss, correct, ap, auroc = self.training_iteration(data, device, model,
                                                                                            criterion_seg,
@@ -225,11 +224,15 @@ class End2End:
                 tensorboard_writer.add_scalar("Accuracy/Train/", epoch_correct / samples_per_epoch, epoch)
 
             if self.cfg.VALIDATE and (epoch % validation_step == 0 or epoch == num_epochs - 1):
+
+                self._save_model(model, f"ep_{epoch:02}.pth")
+
                 mts = self.eval_model(device, model, validation_set, None, False, True, False)
-                validation_ap = mts['ap']
-                validation_accuracy = mts['topk'][0]
                 report = mts['report']
                 confu = mts['confusion']
+                validation_ap = mts['ap']
+                validation_accuracy = mts['topk'][0]
+                validation_f1 = report['macro avg']['f1-score']
                 validation_data.append((
                     validation_ap, 
                     epoch, 
@@ -242,7 +245,9 @@ class End2End:
 
                 if validation_ap > max_validation:
                     max_validation = validation_ap
-                    self._save_model(model, "best_state_dict.pth")
+                    name = f"best_{epoch:02}_ap{validation_ap:.3f}_f{validation_f1:.3f}.pth"
+                    self._log(f"Saving model {name}")
+                    self._save_model(model, name)
 
                 model.train()
                 if tensorboard_writer is not None:
@@ -261,8 +266,6 @@ class End2End:
                 'pred_segs': [],
                 'true_segs': [],
             }
-
-            top1 = 0
 
             pbar = tqdm(total=len(eval_loader), ncols=80)
             time_acc = 1e-10
@@ -283,31 +286,27 @@ class End2End:
                 prediction = prediction.detach().cpu()
                 image = image.detach().cpu().numpy()
                 pred_seg = pred_seg.detach().cpu().numpy()
+                seg_mask = seg_mask.detach().cpu().numpy()
 
                 res["sample_names"].extend(sample_name)
                 res["decs"].extend(prediction)
                 res["clazs"].extend(claz)
                 res["pred_segs"].extend(pred_seg)
                 res["true_segs"].extend(seg_mask)
-
-                mts = utils.accuracy(prediction, claz)
-                top1 += int(mts['topk'][0] * self.cfg.BATCH_SIZE)
-
                 pbar.update(1)
                 pbar.set_postfix({
-                    "FPS": iii / time_acc * len(sample_name),
-                    'Top1': f"{top1}/{(iii + 1) * self.cfg.BATCH_SIZE}"
+                    "FPS": iii / time_acc * image.shape[0]
                 })
             pbar.close()
 
         mts = utils.accuracy(torch.stack(res['decs']), torch.stack(res['clazs']))
+        segmts = utils.accuracy_seg(torch.Tensor(np.array(res['pred_segs'])), torch.Tensor(np.array(res['true_segs'])))
         confu = mts['confusion']
         FP = confu[0][1]
         FN = confu[1][0]
-        TP = confu[1][1]
-        TN = confu[0][0]
-        self._log(f"VALIDATION || AUROC: {mts['auroc']:.5f}, AP: {mts['ap']:.5f}, F1: {mts['report']['macro avg']['f1-score']:.3f}"
-                  f" || FP: {FP:d}, FN: {FN:d}, TP: {TP:d}, TN: {TN:d}")
+        f1 = mts['report']['macro avg']['f1-score']
+        self._log(f"VALIDATION || AUROC: {mts['auroc']:.4f}, AP: {mts['ap']:.4f}, ACC: {mts['topk'][0]:.4f}, F1: {f1:.4f} || FP: {FP:d}, FN: {FN:d}"
+                  f" || AUROC: {segmts['auroc']:.4f}, AP: {segmts['ap']:.4f}, DICE: {segmts['dice']:.4f}, JCCARD: {segmts['jacard']:.4f}")
         
         return mts
 
@@ -338,10 +337,8 @@ class End2End:
         alpha = 0.3
 
         if self.cfg.DYN_BALANCED_LOSS:
-            seg_loss_weight = 1 - (epoch / total_epochs)
-            seg_loss_weight = seg_loss_weight / 2 + alpha
-            dec_loss_weight = self.cfg.DELTA_CLS_LOSS * (epoch / total_epochs)
-            dec_loss_weight = dec_loss_weight / 2 + alpha
+            seg_loss_weight = (1 - (epoch / total_epochs)) * (1 - 2 * alpha) + alpha
+            dec_loss_weight = ((epoch / total_epochs) * (1 - 2 * alpha) + alpha) * self.cfg.DELTA_CLS_LOSS
         else:
             seg_loss_weight = 1
             dec_loss_weight = self.cfg.DELTA_CLS_LOSS
@@ -351,7 +348,8 @@ class End2End:
 
     def reload_model(self, model, load_final=False):
         if self.cfg.USE_BEST_MODEL:
-            path = os.path.join(self.model_path, "best_state_dict.pth")
+            name = sorted(glob(os.path.join(self.model_path, "best_*.pth")))[-1]
+            path = os.path.join(self.model_path, name)
             model.load_state_dict(torch.load(path).state_dict())
             self._log(f"Loading model state from {path}")
         elif load_final:
@@ -392,7 +390,7 @@ class End2End:
 
     def _save_model(self, model, name="final_state_dict.pth"):
         output_name = os.path.join(self.model_path, name)
-        self._log(f"Saving current model state to {output_name}")
+        # self._log(f"Saving current model state to {output_name}")
         if os.path.exists(output_name):
             os.remove(output_name)
 
@@ -406,8 +404,8 @@ class End2End:
             return torch.optim.SGD(model.parameters(), self.cfg.LEARNING_RATE)
 
     def _get_loss(self, is_seg):
-        reduction = "none" if self.cfg.WEIGHTED_SEG_LOSS and is_seg else "mean"
-        return nn.BCEWithLogitsLoss(reduction=reduction)
+        reduce = "none" if is_seg and self.cfg.WEIGHTED_SEG_LOSS else "mean"
+        return nn.BCEWithLogitsLoss(reduction=reduce)
 
     def _get_device(self):
         return f"cuda:{self.cfg.GPU}"
