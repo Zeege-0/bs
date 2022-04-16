@@ -15,7 +15,7 @@ from data.dataset_catalog import get_dataset
 import random
 import cv2
 from config import Config
-from tqdm import tqdm
+from tqdm import tqdm, trange
 from timeit import default_timer as timer
 from torch import autocast
 from torch.cuda.amp.grad_scaler import GradScaler
@@ -46,6 +46,7 @@ class End2End:
         self._set_results_path()
         self._create_results_dirs()
         self.print_run_params()
+        self._save_params()
         if self.cfg.REPRODUCIBLE_RUN:
             self._log("Reproducible run, fixing all seeds to:1337", LVL_DEBUG)
             np.random.seed(1337)
@@ -53,11 +54,14 @@ class End2End:
             random.seed(1337)
             torch.backends.cudnn.deterministic = True
             torch.backends.cudnn.benchmark = False
-
+        
         device = self._get_device()
         model = self._get_model().to(device)
+        # mypath = "/mnt/sdb1/home/zeege/remote/bs/doutput/STEEL/zzztransfer/models/best_47_ap0.965_f0.899.pth"
+        # model = torch.load(mypath).to(device)
+        # print("loaded model!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
         optimizer = self._get_optimizer(model)
-        scaler = GradScaler()
+        scheduler = self._get_scheduler(optimizer)
         loss_seg, loss_dec = self._get_loss(True), self._get_loss(False)
 
         train_loader = get_dataset("TRAIN", self.cfg)
@@ -66,20 +70,19 @@ class End2End:
         tensorboard_writer = SummaryWriter(log_dir=self.tensorboard_path) if WRITE_TENSORBOARD else None
 
         self._log("Starting training")
-        train_results = self._train_model(device, model, train_loader, loss_seg, loss_dec, optimizer, scaler, validation_loader, tensorboard_writer)
+        train_results = self._train_model(device, model, train_loader, loss_seg, loss_dec, optimizer, scheduler, validation_loader, tensorboard_writer)
         self._save_train_results(train_results)
         self._save_model(model)
 
         self.test_model(model, device, self.cfg.SAVE_IMAGES, False, False)
 
-        self._save_params()
 
     def test_model(self, model, device, save_images, plot_seg, reload_final):
         self.reload_model(model, reload_final)
         test_loader = get_dataset("TEST", self.cfg)
         self.eval_model(device, model, test_loader, save_folder=self.outputs_path, save_images=save_images, is_validation=False, plot_seg=plot_seg)
 
-    def training_iteration(self, data, device, model, criterion_seg, criterion_dec, optimizer, scaler, weight_loss_seg, weight_loss_dec,
+    def training_iteration(self, data, device, model, criterion_seg, criterion_dec, optimizer, scheduler, weight_loss_seg, weight_loss_dec,
                            tensorboard_writer, iter_index):
         _images, _claz, _seg_masks, _seg_loss_masks, _is_segmented, _ = data
         
@@ -109,7 +112,7 @@ class End2End:
                 loss = weight_loss_seg * loss_seg + weight_loss_dec * loss_dec
 
                 if is_first_step:
-                    mts = utils.accuracy(decision, claz, train=True)
+                    mts = utils.get_metrics(decision, claz, train=True)
                     _total_correct = int(mts['topk'][0] * self.cfg.BATCH_SIZE)
                     _ap = mts['ap']
                     _auroc = mts['auroc']
@@ -148,111 +151,117 @@ class End2End:
 
         return total_loss_seg, total_loss_dec, total_loss, total_correct, total_ap, total_auroc
 
-    def _train_model(self, device, model: nn.Module, train_loader, criterion_seg, criterion_dec, optimizer, scaler, validation_set, tensorboard_writer):
-        losses = []
-        validation_data = []
-        max_validation = -1
-        validation_step = self.cfg.VALIDATION_N_EPOCHS
+    def _train_model(self, device, model: nn.Module, train_loader, criterion_seg, criterion_dec, optimizer, scheduler, validation_set, tensorboard_writer):
+        try:
+            losses = []
+            validation_data = []
+            max_validation = -1
+            validation_step = self.cfg.VALIDATION_N_EPOCHS
 
-        num_epochs = self.cfg.EPOCHS
-        samples_per_epoch = len(train_loader) * self.cfg.BATCH_SIZE
+            num_epochs = self.cfg.EPOCHS
+            samples_per_epoch = len(train_loader) * self.cfg.BATCH_SIZE
 
-        self.set_dec_gradient_multiplier(model, 0.0)
+            self.set_dec_gradient_multiplier(model, 0.0)
 
-        for epoch in range(num_epochs):
-
-            model.train()
-
-            weight_loss_seg, weight_loss_dec = self.get_loss_weights(epoch)
-            dec_gradient_multiplier = self.get_dec_gradient_multiplier()
-            self.set_dec_gradient_multiplier(model, dec_gradient_multiplier)
-
-            epoch_loss_seg, epoch_loss_dec, epoch_loss = 0, 0, 0
-            epoch_correct = 0
-            epoch_ap = 0
-            epoch_auroc = 0
-
-            pbar = tqdm(total=len(train_loader), ncols=140, bar_format="{desc} {bar}{r_bar}")
-            time_acc = 0
-            start = timer()
-            for iter_index, (data) in enumerate(train_loader):
-                pbar.set_description(f"{epoch + 1}/{num_epochs}")
-                start_1 = timer()
-                curr_loss_seg, curr_loss_dec, curr_loss, correct, ap, auroc = self.training_iteration(data, device, model,
-                                                                                           criterion_seg,
-                                                                                           criterion_dec,
-                                                                                           optimizer, 
-                                                                                           scaler,
-                                                                                           weight_loss_seg,
-                                                                                           weight_loss_dec,
-                                                                                           tensorboard_writer, (epoch * samples_per_epoch + iter_index))
-
-                end_1 = timer()
-                time_acc = time_acc + (end_1 - start_1)
-
-                epoch_loss_seg += curr_loss_seg
-                epoch_loss_dec += curr_loss_dec
-                epoch_loss += curr_loss
-                epoch_correct += int(correct)
-                epoch_ap += ap
-                epoch_auroc += auroc
-                pbar.update(1)
-                pbar.set_postfix({
-                    # 'time': f'{time_acc:.2f}s',
-                    'top1': f"{epoch_correct}/{(iter_index + 1) * self.cfg.BATCH_SIZE}",
-                    'ap': f"{(epoch_ap / (iter_index + 1)):.2f}",
-                    'auroc': f"{(epoch_auroc / (iter_index + 1)):.2f}",
-                    'seg': f"{(epoch_loss_seg / (iter_index + 1) ):.5f}",
-                    'dec': f"{(epoch_loss_dec / (iter_index + 1)):.5f}",
-                    'loss': f"{(epoch_loss / (iter_index + 1)):.5f}",
-                })
-
-            end = timer()
-            pbar.close()
-
-            epoch_loss_seg = epoch_loss_seg / len(train_loader)
-            epoch_loss_dec = epoch_loss_dec / len(train_loader)
-            epoch_loss = epoch_loss / len(train_loader)
-            losses.append((epoch_loss_seg, epoch_loss_dec, epoch_loss, epoch))
-
-            # self._log(f"Epoch {epoch + 1}/{num_epochs} ==> avg_loss_seg={epoch_loss_seg:.5f}, avg_loss_dec={epoch_loss_dec:.5f}, avg_loss={epoch_loss:.5f}, correct={epoch_correct}/{samples_per_epoch}, in {end - start:.2f}s/epoch (fwd/bck in {time_acc:.2f}s/epoch)")
-
-            if tensorboard_writer is not None:
-                tensorboard_writer.add_scalar("Loss/Train/segmentation", epoch_loss_seg, epoch)
-                tensorboard_writer.add_scalar("Loss/Train/classification", epoch_loss_dec, epoch)
-                tensorboard_writer.add_scalar("Loss/Train/joined", epoch_loss, epoch)
-                tensorboard_writer.add_scalar("Accuracy/Train/", epoch_correct / samples_per_epoch, epoch)
-
-            if self.cfg.VALIDATE and (epoch % validation_step == 0 or epoch == num_epochs - 1):
-
-                self._save_model(model, f"ep_{epoch:02}.pth")
-
-                mts = self.eval_model(device, model, validation_set, None, False, True, False)
-                report = mts['report']
-                confu = mts['confusion']
-                validation_ap = mts['ap']
-                validation_accuracy = mts['topk'][0]
-                validation_f1 = report['macro avg']['f1-score']
-                validation_data.append((
-                    validation_ap, 
-                    epoch, 
-                    report['macro avg']['f1-score'], 
-                    confu[0][1], # FP
-                    confu[1][0], # FN
-                    confu[1][1], # TP
-                    confu[0][0] # TN
-                ))
-
-                if validation_ap > max_validation:
-                    max_validation = validation_ap
-                    name = f"best_{epoch:02}_ap{validation_ap:.3f}_f{validation_f1:.3f}.pth"
-                    self._log(f"Saving model {name}")
-                    self._save_model(model, name)
+            for epoch in range(num_epochs):
 
                 model.train()
-                if tensorboard_writer is not None:
-                    tensorboard_writer.add_scalar("Accuracy/Validation/", validation_accuracy, epoch)
 
+                weight_loss_seg, weight_loss_dec = self.get_loss_weights(epoch)
+                dec_gradient_multiplier = self.get_dec_gradient_multiplier()
+                self.set_dec_gradient_multiplier(model, dec_gradient_multiplier)
+
+                epoch_loss_seg, epoch_loss_dec, epoch_loss = 0, 0, 0
+                epoch_correct = 0
+                epoch_ap = 0
+                epoch_auroc = 0
+
+                pbar = tqdm(total=len(train_loader), ncols=140, bar_format="{desc} {bar}{r_bar}")
+                time_acc = 0
+                start = timer()
+                for iter_index, (data) in enumerate(train_loader):
+                    pbar.set_description(f"{epoch + 1}/{num_epochs}")
+                    start_1 = timer()
+                    curr_loss_seg, curr_loss_dec, curr_loss, correct, ap, auroc = self.training_iteration(data, device, model,
+                                                                                            criterion_seg,
+                                                                                            criterion_dec,
+                                                                                            optimizer, 
+                                                                                            scheduler,
+                                                                                            weight_loss_seg,
+                                                                                            weight_loss_dec,
+                                                                                            tensorboard_writer, (epoch * samples_per_epoch + iter_index))
+
+                    end_1 = timer()
+                    time_acc = time_acc + (end_1 - start_1)
+
+                    epoch_loss_seg += curr_loss_seg
+                    epoch_loss_dec += curr_loss_dec
+                    epoch_loss += curr_loss
+                    epoch_correct += int(correct)
+                    epoch_ap += ap
+                    epoch_auroc += auroc
+                    pbar.update(1)
+                    pbar.set_postfix({
+                        # 'time': f'{time_acc:.2f}s',
+                        'top1': f"{epoch_correct}/{(iter_index + 1) * self.cfg.BATCH_SIZE}",
+                        'ap': f"{(epoch_ap / (iter_index + 1)):.2f}",
+                        'auroc': f"{(epoch_auroc / (iter_index + 1)):.2f}",
+                        'seg': f"{(epoch_loss_seg / (iter_index + 1) ):.5f}",
+                        'dec': f"{(epoch_loss_dec / (iter_index + 1)):.5f}",
+                        'loss': f"{(epoch_loss / (iter_index + 1)):.5f}",
+                    })
+
+                end = timer()
+                pbar.close()
+
+                epoch_loss_seg = epoch_loss_seg / len(train_loader)
+                epoch_loss_dec = epoch_loss_dec / len(train_loader)
+                epoch_loss = epoch_loss / len(train_loader)
+                scheduler.step(epoch_loss)
+                losses.append((epoch_loss_seg, epoch_loss_dec, epoch_loss, epoch))
+
+                # self._log(f"Epoch {epoch + 1}/{num_epochs} ==> avg_loss_seg={epoch_loss_seg:.5f}, avg_loss_dec={epoch_loss_dec:.5f}, avg_loss={epoch_loss:.5f}, correct={epoch_correct}/{samples_per_epoch}, in {end - start:.2f}s/epoch (fwd/bck in {time_acc:.2f}s/epoch)")
+
+                if tensorboard_writer is not None:
+                    tensorboard_writer.add_scalar("Loss/Train/segmentation", epoch_loss_seg, epoch)
+                    tensorboard_writer.add_scalar("Loss/Train/classification", epoch_loss_dec, epoch)
+                    tensorboard_writer.add_scalar("Loss/Train/joined", epoch_loss, epoch)
+                    tensorboard_writer.add_scalar("Accuracy/Train/", epoch_correct / samples_per_epoch, epoch)
+
+                if (epoch % validation_step == 0 or epoch == num_epochs - 1):
+                    self._save_model(model, f"ep_{epoch:02}.pth")
+
+                if self.cfg.VALIDATE and (epoch % validation_step == 0 or epoch == num_epochs - 1):
+
+                    mts = self.eval_model(device, model, validation_set, None, False, True, False)
+                    report = mts['report']
+                    confu = mts['confusion']
+                    validation_ap = mts['ap']
+                    validation_accuracy = mts['topk'][0]
+                    validation_f1 = mts['f1']
+                    validation_data.append((
+                        validation_ap, 
+                        epoch, 
+                        mts['f1'], 
+                        confu[0][1], # FP
+                        confu[1][0], # FN
+                        confu[1][1], # TP
+                        confu[0][0] # TN
+                    ))
+
+                    if validation_ap > max_validation:
+                        max_validation = validation_ap
+                        name = f"best_{epoch:02}_ap{validation_ap:.3f}_f{validation_f1:.3f}.pth"
+                        self._log(f"Saving model {name}")
+                        self._save_model(model, name)
+
+                    model.train()
+                    if tensorboard_writer is not None:
+                        tensorboard_writer.add_scalar("Accuracy/Validation/", validation_accuracy, epoch)
+        except KeyboardInterrupt:
+            self._log("Training interrupted")
+            self._save_model(model, "interrupt.pth")
+            return losses, validation_data
         return losses, validation_data
 
     def eval_model(self, device, model, eval_loader, save_folder, save_images, is_validation, plot_seg):
@@ -265,9 +274,13 @@ class End2End:
                 'clazs': [],
                 'pred_segs': [],
                 'true_segs': [],
+                'images': []
             }
 
-            pbar = tqdm(total=len(eval_loader), ncols=80)
+            if is_validation:
+                pbar = utils.FakeTqdm(total=len(eval_loader))
+            else:
+                pbar = tqdm(total=len(eval_loader), ncols=80)
             time_acc = 1e-10
             for iii, (data_point) in enumerate(eval_loader):
                 image, claz, seg_mask, seg_loss_mask, _, sample_name = data_point
@@ -293,32 +306,59 @@ class End2End:
                 res["clazs"].extend(claz)
                 res["pred_segs"].extend(pred_seg)
                 res["true_segs"].extend(seg_mask)
+                res["images"].extend(image)
                 pbar.update(1)
                 pbar.set_postfix({
                     "FPS": iii / time_acc * image.shape[0]
                 })
             pbar.close()
 
-        mts = utils.accuracy(torch.stack(res['decs']), torch.stack(res['clazs']))
-        segmts = utils.accuracy_seg(torch.Tensor(np.array(res['pred_segs'])), torch.Tensor(np.array(res['true_segs'])))
+        res["decs"] = torch.stack(res["decs"])
+        res["clazs"] = torch.stack(res["clazs"])
+        res["pred_segs"] = torch.Tensor(np.array(res['pred_segs']))
+        res["true_segs"] = torch.Tensor(np.array(res['true_segs']))
+        res["images"] = torch.Tensor(np.array(res['images']))
+
+        mts = utils.get_metrics(res['decs'], res['clazs'])
+        segmts = utils.get_seg_metrics(res['pred_segs'], res['true_segs'])
+        mts["seg"] = segmts
         confu = mts['confusion']
         FP = confu[0][1]
         FN = confu[1][0]
-        f1 = mts['report']['macro avg']['f1-score']
-        self._log(f"VALIDATION || AUROC: {mts['auroc']:.4f}, AP: {mts['ap']:.4f}, ACC: {mts['topk'][0]:.4f}, F1: {f1:.4f} || FP: {FP:d}, FN: {FN:d}"
+        self._log(f"VALIDATION || AUROC: {mts['auroc']:.4f}, AP: {mts['ap']:.4f}, ACC: {mts['topk'][0]:.4f}, F1: {mts['f1']:.4f} || FP: {FP:d}, FN: {FN:d}"
                   f" || AUROC: {segmts['auroc']:.4f}, AP: {segmts['ap']:.4f}, DICE: {segmts['dice']:.4f}, JCCARD: {segmts['jacard']:.4f}")
         
+        if not is_validation:
+            torch.save(mts, f"{save_folder}/metrics.pth")
+            preds = res['decs'].max(dim=1)[1].type(torch.int)
+            gts = res['clazs'].max(dim=1)[1].type(torch.int)
+            df = pd.DataFrame(data={
+                'decision': preds,
+                'ground_truth': gts,
+                'img_name': res['sample_names']
+            })
+            df = pd.concat([df, pd.DataFrame(res['decs'])], axis=1)
+            df.to_csv(os.path.join(self.run_path, 'results.csv'), index=False)
+
+            if save_images:
+                dsize = self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT
+                for idx in trange(len(res["clazs"]), ncols=80):
+                    image = res['images'][idx].permute(1, 2, 0).numpy()
+                    pred_seg = res['pred_segs'][idx].permute(1, 2, 0).numpy()
+                    seg_mask = res['true_segs'][idx].permute(1, 2, 0).numpy()
+                    sample_name = res['sample_names'][idx]
+                    prediction = preds[idx].item()
+                    image = cv2.resize(image, dsize)
+                    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+                    pred_seg = cv2.resize(pred_seg, dsize) if len(pred_seg.shape) == 4 else cv2.resize(pred_seg, dsize)
+                    seg_mask = cv2.resize(seg_mask, dsize)
+                    if False: # self.cfg.WEIGHTED_SEG_LOSS:
+                        seg_loss_mask = cv2.resize(seg_loss_mask.numpy()[0, 0, :, :], dsize)
+                        utils.plot_sample(sample_name, image, pred_seg, seg_loss_mask, save_folder, decision=prediction, plot_seg=plot_seg)
+                    else:
+                        utils.plot_sample(sample_name, image, pred_seg, seg_mask, save_folder, decision=prediction, plot_seg=plot_seg)
+
         return mts
-
-        # if is_validation:
-        #     metrics = utils.get_metrics(np.array(ground_truths), np.array(predictions))
-        #     FP, FN, TP, TN = list(map(sum, [metrics["FP"], metrics["FN"], metrics["TP"], metrics["TN"]]))
-        #     self._log(f"VALIDATION || AUC={metrics['AUC']:f}, and AP={metrics['AP']:f}, with best thr={metrics['best_thr']:f} "
-        #               f"at f-measure={metrics['best_f_measure']:.3f} and FP={FP:d}, FN={FN:d}, TOTAL SAMPLES={FP + FN + TP + TN:d}")
-
-        #     return metrics["AP"], metrics["accuracy"], metrics["best_f_measure"], FP, FN, TP, TN
-        # else:
-        #     utils.evaluate_metrics(res, self.run_path, self.run_name)
 
     def get_dec_gradient_multiplier(self):
         if self.cfg.GRADIENT_ADJUSTMENT:
@@ -346,7 +386,7 @@ class End2End:
         self._log(f"Returning seg_loss_weight {seg_loss_weight} and dec_loss_weight {dec_loss_weight}", LVL_DEBUG)
         return seg_loss_weight, dec_loss_weight
 
-    def reload_model(self, model, load_final=False):
+    def reload_model(self, model=None, load_final=False):
         if self.cfg.USE_BEST_MODEL:
             name = sorted(glob(os.path.join(self.model_path, "best_*.pth")))[-1]
             path = os.path.join(self.model_path, name)
@@ -373,15 +413,16 @@ class End2End:
         plt.plot(le, ls, label="Loss seg")
         plt.plot(le, ld, label="Loss dec")
         plt.ylim(bottom=0)
+        plt.legend()
         plt.grid()
         plt.xlabel("Epochs")
         v, ve, f1, FP, FN, TP, TN = map(list, zip(*validation_data))
         plt.twinx()
-        plt.plot(ve, v, label="Validation AP", color="Green")
-        plt.plot(ve, f1, label="Validation F1", color="Blue")
+        plt.plot(ve, v, label="Val AP", color="Green")
+        plt.plot(ve, f1, label="Val F1", color="Blue")
         plt.ylim((0, 1))
         plt.legend()
-        plt.savefig(os.path.join(self.run_path, "loss_val"), dpi=200)
+        plt.savefig(os.path.join(self.run_path, "loss_val.pdf"))
 
         df_loss = pd.DataFrame(data={"epoch": le, "loss_seg": ls, "loss_dec": ld, "loss": l})
         df_loss.to_csv(os.path.join(self.run_path, "losses.csv"), index=False)
@@ -402,6 +443,10 @@ class End2End:
             return SAM(model.parameters(), base_optimizer, lr=self.cfg.LEARNING_RATE, momentum=0.9)
         else:
             return torch.optim.SGD(model.parameters(), self.cfg.LEARNING_RATE)
+
+    def _get_scheduler(self, optimizer):
+        return torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, patience=5, factor=0.5, threshold=0.0001, verbose=True)
 
     def _get_loss(self, is_seg):
         reduce = "none" if is_seg and self.cfg.WEIGHTED_SEG_LOSS else "mean"
@@ -433,7 +478,7 @@ class End2End:
         if self.cfg.MY:
             seg_net = LizNet(self.cfg.USE_MED, self._get_device(), self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT, self.cfg.INPUT_CHANNELS, classes=2)
         else:
-            seg_net = SegDecNet(self._get_device(), self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT, self.cfg.INPUT_CHANNELS)
+            seg_net = SegDecNet(self._get_device(), self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT, self.cfg.INPUT_CHANNELS, classes=2)
         return seg_net
 
     def print_run_params(self):

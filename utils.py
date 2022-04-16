@@ -1,3 +1,5 @@
+import sys
+import time
 import matplotlib
 
 matplotlib.use('Agg')
@@ -12,13 +14,14 @@ import cv2
 import torch
 import sklearn
 from sklearn import metrics
+from timeit import default_timer as timer
 
 
 def jacard(y_pred, y_true, reduce=True):
     assert (y_pred.shape == y_true.shape) and (y_pred.ndim >= 3)
     N = y_pred.shape[0]
     y_true_f = y_true.view(N, -1)
-    y_pred_f = y_pred.view(N, -1)
+    y_pred_f = (y_pred > 0.5).view(N, -1).type_as(y_true_f)
     intersection = torch.sum(y_true_f * y_pred_f, dim=1)
     union = torch.sum(y_true_f + y_pred_f - y_true_f * y_pred_f, dim=1)
     ret = intersection / union
@@ -36,7 +39,7 @@ def dice_coef(y_pred, y_true, reduce=True):
     return ret.mean() if reduce else ret
 
 
-def accuracy_seg(pred, label):
+def get_seg_metrics(pred, label):
     assert (pred.shape == label.shape) and (pred.ndim >= 3)
     with torch.no_grad():
         
@@ -44,7 +47,7 @@ def accuracy_seg(pred, label):
         pred = pred.detach().cpu()
         label = label.detach().cpu()
         linpred = pred.flatten()
-        linlab = (label.flatten() > 0).type_as(linpred)
+        linlab = (label.flatten() > 0.3).type_as(linpred)
 
         ret['ap'] = metrics.average_precision_score(linlab, linpred.flatten())
         ret['auroc'] = metrics.roc_auc_score(linlab, linpred.flatten())
@@ -54,7 +57,7 @@ def accuracy_seg(pred, label):
         return ret
 
 
-def accuracy(pred, label, topk=(1,), train=False):
+def get_metrics(pred, label, topk=(1,), train=False):
     with torch.no_grad():
         ret = dict()
 
@@ -79,15 +82,93 @@ def accuracy(pred, label, topk=(1,), train=False):
             res.append(correct_k.div_(batch_size).item())
         ret['topk'] = res
         if linlab.max() != linlab.min():
-            ret['ap'] = metrics.average_precision_score(label, pred)
-            ret['auroc'] = metrics.roc_auc_score(label, pred)
+            try:
+                ret['ap'] = metrics.average_precision_score(label, pred)
+                ret['auroc'] = metrics.roc_auc_score(label, pred)
+            except ValueError:
+                ret['ap'] = ret['topk'][0]
+                ret['auroc'] = ret['topk'][0]
             if not train:
                 ret['confusion'] = metrics.confusion_matrix(linlab, linpred)
                 ret['report'] = metrics.classification_report(linlab, linpred, output_dict=True, zero_division=0)
+                ret['f1'] = ret['report']['weighted avg']['f1-score']
         else:
             ret['ap'] = ret['topk'][0]
             ret['auroc'] = ret['topk'][0]
         return ret
+
+
+def evaluate_metrics(res, results_path, run_name):
+
+    img_names = res['sample_names']
+    predictions = res['decs']
+    labels = res['clazs']
+
+    metrics = get_metrics(labels, predictions)
+
+    df = pd.DataFrame(
+        data={'prediction': predictions,
+              'decision': metrics['decisions'],
+              'ground_truth': labels,
+              'img_name': img_names})
+    df.to_csv(os.path.join(results_path, 'results.csv'), index=False)
+
+    print(
+        f'{run_name} EVAL AUC={metrics["AUC"]:f}, and AP={metrics["AP"]:f}, w/ best thr={metrics["best_thr"]:f} at f-m={metrics["best_f_measure"]:.3f} and FP={sum(metrics["FP"]):d}, FN={sum(metrics["FN"]):d}')
+
+    with open(os.path.join(results_path, 'metrics.pkl'), 'wb') as f:
+        pickle.dump(metrics, f)
+        f.close()
+
+    plt.figure(1)
+    plt.clf()
+    plt.plot(metrics['recall'], metrics['precision'])
+    plt.title('Average Precision=%.4f' % metrics['AP'])
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.savefig(f"{results_path}/precision-recall.pdf", bbox_inches='tight')
+
+    plt.figure(1)
+    plt.clf()
+    plt.plot(metrics['FPR'], metrics['TPR'])
+    plt.title('AUC=%.4f' % metrics['AUC'])
+    plt.xlabel('False positive rate')
+    plt.ylabel('True positive rate')
+    plt.savefig(f"{results_path}/ROC.pdf", bbox_inches='tight')
+
+
+@np.deprecate(message="This function is deprecated. Use the function 'get_metrics' instead.")
+def zzzget_metrics_deprecated(labels, predictions):
+    metrics = {}
+    precision, recall, thresholds = precision_recall_curve(labels, predictions)
+    metrics['precision'] = precision
+    metrics['recall'] = recall
+    metrics['thresholds'] = thresholds
+    f_measures = 2 * np.multiply(recall, precision) / (recall + precision + 1e-8)
+    metrics['f_measures'] = f_measures
+    ix_best = np.argmax(f_measures)
+    metrics['ix_best'] = ix_best
+    best_f_measure = f_measures[ix_best]
+    metrics['best_f_measure'] = best_f_measure
+    best_thr = thresholds[ix_best]
+    metrics['best_thr'] = best_thr
+    FPR, TPR, _ = roc_curve(labels, predictions)
+    metrics['FPR'] = FPR
+    metrics['TPR'] = TPR
+    AUC = auc(FPR, TPR)
+    metrics['AUC'] = AUC
+    AP = auc(recall, precision)
+    metrics['AP'] = AP
+    decisions = predictions >= best_thr
+    metrics['decisions'] = decisions
+    FP, FN, TN, TP = calc_confusion_mat(decisions, labels)
+    metrics['FP'] = FP
+    metrics['FN'] = FN
+    metrics['TN'] = TN
+    metrics['TP'] = TP
+    metrics['accuracy'] = (sum(TP) + sum(TN)) / (sum(TP) + sum(TN) + sum(FP) + sum(FN))
+    return metrics
+
 
 
 def create_folder(folder, exist_ok=True):
@@ -166,77 +247,6 @@ def plot_sample(image_name, image, segmentation, label, save_dir, decision=None,
         cv2.imwrite(f"{save_dir}/{out_prefix}_segmentation_{image_name}.png", jet_seg)
 
 
-def evaluate_metrics(samples, results_path, run_name):
-    samples = np.array(samples)
-
-    img_names = samples[:, 4]
-    predictions = samples[:, 0]
-    labels = samples[:, 3].astype(np.float32)
-
-    metrics = get_metrics(labels, predictions)
-
-    df = pd.DataFrame(
-        data={'prediction': predictions,
-              'decision': metrics['decisions'],
-              'ground_truth': labels,
-              'img_name': img_names})
-    df.to_csv(os.path.join(results_path, 'results.csv'), index=False)
-
-    print(
-        f'{run_name} EVAL AUC={metrics["AUC"]:f}, and AP={metrics["AP"]:f}, w/ best thr={metrics["best_thr"]:f} at f-m={metrics["best_f_measure"]:.3f} and FP={sum(metrics["FP"]):d}, FN={sum(metrics["FN"]):d}')
-
-    with open(os.path.join(results_path, 'metrics.pkl'), 'wb') as f:
-        pickle.dump(metrics, f)
-        f.close()
-
-    plt.figure(1)
-    plt.clf()
-    plt.plot(metrics['recall'], metrics['precision'])
-    plt.title('Average Precision=%.4f' % metrics['AP'])
-    plt.xlabel('Recall')
-    plt.ylabel('Precision')
-    plt.savefig(f"{results_path}/precision-recall.pdf", bbox_inches='tight')
-
-    plt.figure(1)
-    plt.clf()
-    plt.plot(metrics['FPR'], metrics['TPR'])
-    plt.title('AUC=%.4f' % metrics['AUC'])
-    plt.xlabel('False positive rate')
-    plt.ylabel('True positive rate')
-    plt.savefig(f"{results_path}/ROC.pdf", bbox_inches='tight')
-
-
-def get_metrics(labels, predictions):
-    metrics = {}
-    precision, recall, thresholds = precision_recall_curve(labels, predictions)
-    metrics['precision'] = precision
-    metrics['recall'] = recall
-    metrics['thresholds'] = thresholds
-    f_measures = 2 * np.multiply(recall, precision) / (recall + precision + 1e-8)
-    metrics['f_measures'] = f_measures
-    ix_best = np.argmax(f_measures)
-    metrics['ix_best'] = ix_best
-    best_f_measure = f_measures[ix_best]
-    metrics['best_f_measure'] = best_f_measure
-    best_thr = thresholds[ix_best]
-    metrics['best_thr'] = best_thr
-    FPR, TPR, _ = roc_curve(labels, predictions)
-    metrics['FPR'] = FPR
-    metrics['TPR'] = TPR
-    AUC = auc(FPR, TPR)
-    metrics['AUC'] = AUC
-    AP = auc(recall, precision)
-    metrics['AP'] = AP
-    decisions = predictions >= best_thr
-    metrics['decisions'] = decisions
-    FP, FN, TN, TP = calc_confusion_mat(decisions, labels)
-    metrics['FP'] = FP
-    metrics['FN'] = FN
-    metrics['TN'] = TN
-    metrics['TP'] = TP
-    metrics['accuracy'] = (sum(TP) + sum(TN)) / (sum(TP) + sum(TN) + sum(FP) + sum(FN))
-    return metrics
-
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
@@ -260,3 +270,38 @@ class AverageMeter(object):
     def __str__(self):
         fmtstr = "{name} {val" + self.fmt + "} ({avg" + self.fmt + "})"
         return fmtstr.format(**self.__dict__)
+
+
+class FakeTqdm(object):
+    def __init__(self, total=None, *vags, **kwargs):
+        self.total = total
+        self.n = 0
+        self.st = timer()
+
+    def set_postfix(self, *vargs, **kwargs):
+        pass
+
+    def update(self, n):
+        self.n += n
+        sys.stdout.write(f'\r{self.n}/{self.total} {timer() - self.st:.2f}s ')
+
+    def close(self):
+        print("|| ", end="")
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+    def __str__(self):
+        return f'{self.n}/{self.total}'
+
+
+if __name__ == '__main__':
+    bar = FakeTqdm(total=10)
+    for i in range(10):
+        bar.update(1)
+        time.sleep(0.3)
+    bar.close()
