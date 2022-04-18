@@ -293,64 +293,20 @@ class CFPEncoder(nn.Module):
         return output2_cat
     
 
-
-class CFPNet(nn.Module):
-    def __init__(self, classes=11, block_1=2, block_2=6):
+class EncoderDecoderWrapper(nn.Module):
+    def __init__(self, img_channels, encoder, features):
         super().__init__()
-        self.init_conv = nn.Sequential(
-            Conv(3, 32, 3, 2, padding=1, bn_acti=True),
-            Conv(32, 32, 3, 1, padding=1, bn_acti=True),
-            Conv(32, 32, 3, 1, padding=1, bn_acti=True),
-        )
+        self.encoder = encoder
+        self.deconvs = []
+        prev_feat = features[-1]
+        for i in range(2, len(features) + 1):
+            self.deconvs.append(DeConv(prev_feat, features[-i], 3, 2, padding=1, output_padding=1, bn_acti=True))
+            prev_feat = features[-i] * 2
+        self.deconvs.append(Conv(prev_feat, img_channels, 1, 1, padding=1, bn_acti=True))
 
-        self.down_1 = InputInjection(1)  # down-sample the image 1 times
-        self.down_2 = InputInjection(2)  # down-sample the image 2 times
-        self.down_3 = InputInjection(3)  # down-sample the image 3 times
+    def forward(self, x):
+        features = self.encoder(x)
+        for i in range(0, len(self.deconvs)):
+            x = self.deconvs[i](torch.cat([x, features[-i - 1]], dim=1))
+        return x
 
-        self.bn_prelu_1 = BNPReLU(32 + 3)
-        dilation_block_1 =[1, 3]
-        # CFP Block 1
-        self.downsample_1 = DownSamplingBlock(32 + 3, 64)
-        self.CFP_Block_1 = nn.Sequential()
-        for i in range(0, block_1):
-            self.CFP_Block_1.add_module("CFP_Module_1_" + str(i), CFPModule(64, d=dilation_block_1[i]))
-            
-        self.bn_prelu_2 = BNPReLU(128 + 3)
-
-        # CFP Block 2
-        dilation_block_2 = [4,4,8,8,16,16] #camvid #cityscapes [4,4,8,8,16,16] # [4,8,16]
-        self.downsample_2 = DownSamplingBlock(128 + 3, 128)
-        self.CFP_Block_2 = nn.Sequential()
-        for i in range(0, block_2):
-            self.CFP_Block_2.add_module("CFP_Module_2_" + str(i),
-                                        CFPModule(128, d=dilation_block_2[i]))
-        self.bn_prelu_3 = BNPReLU(256 + 3)
-
-        self.classifier = nn.Sequential(Conv(259, classes, 1, 1, padding=0))
-
-    def forward(self, input):
-
-        output0 = self.init_conv(input)
-
-        down_1 = self.down_1(input)
-        down_2 = self.down_2(input)
-        down_3 = self.down_3(input)
-
-        output0_cat = self.bn_prelu_1(torch.cat([output0, down_1], 1))
-
-        # CFP Block 1
-        output1_0 = self.downsample_1(output0_cat)
-        output1 = self.CFP_Block_1(output1_0)
-        output1_cat = self.bn_prelu_2(torch.cat([output1, output1_0, down_2], 1))
-
-        # CFP Block 2
-        output2_0 = self.downsample_2(output1_cat)
-        output2 = self.CFP_Block_2(output2_0)
-        output2_cat = self.bn_prelu_3(torch.cat([output2, output2_0, down_3], 1))
-
-        out = self.classifier(output2_cat)
-        out = F.interpolate(out, input.size()[2:], mode='bilinear', align_corners=False)
-
-        return out
-    
-    
