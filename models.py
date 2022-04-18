@@ -32,7 +32,7 @@ def _conv_block(in_chanels, out_chanels, kernel_size, padding):
                                      kernel_size=kernel_size, padding=padding, bias=False),
                          SimAMAttention(),
                          FeatureNorm(num_features=out_chanels, eps=0.001),
-                         nn.ReLU())
+                         nn.GELU())
 
 
 class FeatureNorm(nn.Module):
@@ -94,7 +94,7 @@ class SegDecNet(nn.Module):
 
         self.fc = nn.Sequential(
             nn.Linear(in_features=66, out_features=128),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Dropout(0.5),
             nn.Linear(in_features=128, out_features=classes),
         )

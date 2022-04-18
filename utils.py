@@ -23,7 +23,7 @@ def jacard(y_pred, y_true, reduce=True):
     y_true_f = y_true.view(N, -1)
     y_pred_f = (y_pred > 0.5).view(N, -1).type_as(y_true_f)
     intersection = torch.sum(y_true_f * y_pred_f, dim=1)
-    union = torch.sum(y_true_f + y_pred_f - y_true_f * y_pred_f, dim=1)
+    union = torch.sum(y_true_f + y_pred_f - y_true_f * y_pred_f, dim=1) + 1e-10
     ret = intersection / union
     return ret.mean() if reduce else ret
 
