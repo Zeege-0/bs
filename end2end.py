@@ -99,8 +99,8 @@ class End2End:
                 decision, output_seg_mask = model(images)
 
                 # fake label for non segmented images
-                non_segmented_mask = ((is_segmented == False) & (claz[:, 0] == 1))
-                seg_masks[non_segmented_mask] = 1
+                non_segmented_mask = ((is_segmented == False) & (claz[:, 0] == 0))
+                # seg_masks[non_segmented_mask] = 1
                 # output_seg_mask[non_segmented_mask] = torch.Tensor([np.finfo(np.float32).max])
                 seg_loss_masks[non_segmented_mask] = 0
 
