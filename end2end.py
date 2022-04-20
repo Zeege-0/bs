@@ -229,7 +229,7 @@ class End2End:
                     tensorboard_writer.add_scalar("Loss/Train/joined", epoch_loss, epoch)
                     tensorboard_writer.add_scalar("Accuracy/Train/", epoch_correct / samples_per_epoch, epoch)
 
-                if (epoch % validation_step == 0 or epoch == num_epochs - 1):
+                if epoch > 0.3 * num_epochs and (epoch % 5 == 0 or epoch == num_epochs - 1):
                     self._save_model(model, f"ep_{epoch:02}.pth")
 
                 if self.cfg.VALIDATE and (epoch % validation_step == 0 or epoch == num_epochs - 1):
@@ -253,8 +253,9 @@ class End2End:
                     if validation_ap > max_validation:
                         max_validation = validation_ap
                         name = f"best_{epoch:02}_ap{validation_ap:.3f}_f{validation_f1:.3f}.pth"
-                        self._log(f"Saving model {name}")
-                        self._save_model(model, name)
+                        if epoch > 0.3 * num_epochs:
+                            self._log(f"Saving model {name}")
+                            self._save_model(model, name)
 
                     model.train()
                     if tensorboard_writer is not None:
@@ -326,8 +327,8 @@ class End2End:
         confu = mts['confusion']
         FP = confu[0][1]
         FN = confu[1][0]
-        self._log(f"VALIDATION || AUROC: {mts['auroc']:.4f}, AP: {mts['ap']:.4f}, ACC: {mts['topk'][0]:.4f}, F1: {mts['f1']:.4f} || FP: {FP:d}, FN: {FN:d}"
-                  f" || AUROC: {segmts['auroc']:.4f}, AP: {segmts['ap']:.4f}, DICE: {segmts['dice']:.4f}, JCCARD: {segmts['jacard']:.4f}")
+        self._log(f"|| AUROC: {mts['auroc']:.4f}, AP: {mts['ap']:.4f}, ACC: {mts['topk'][0]:.4f}, F1: {mts['f1']:.4f} || FP: {FP:d}, FN: {FN:d} "
+                  f"|| AUROC: {segmts['auroc']:.4f}, AP: {segmts['ap']:.4f}, DICE: {segmts['dice']:.4f}, JCCARD: {segmts['jacard']:.4f}")
         
         if not is_validation:
             torch.save(mts, f"{save_folder}/metrics.pth")
