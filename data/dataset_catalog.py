@@ -24,7 +24,7 @@ def get_dataset(kind: str, cfg: Config) -> Optional[DataLoader]:
         raise Exception(f"Unknown dataset {cfg.DATASET}")
 
     shuffle = kind == "TRAIN"
-    batch_size = cfg.BATCH_SIZE
+    batch_size = cfg.BATCH_SIZE if kind == "TRAIN" else 64
     num_workers = 0
     drop_last = kind != "TEST"
     pin_memory = True

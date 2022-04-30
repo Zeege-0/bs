@@ -238,8 +238,10 @@ class InputInjection(nn.Module):
 
 
 class CFPEncoder(nn.Module):
-    def __init__(self, img_channels, block_1=2, block_2=6):
+    def __init__(self, img_channels, block_1=2, block_2=6, return_features=False):
         super().__init__()
+        self.return_features = return_features
+
         self.init_conv = nn.Sequential(
             Conv(img_channels, 32, 3, 2, padding=1, bn_acti=True),
             Conv(32, 32, 3, 1, padding=1, bn_acti=True),
@@ -272,29 +274,35 @@ class CFPEncoder(nn.Module):
 
 
     def forward(self, input):
-
-        output0 = self.init_conv(input)
+        features = []
 
         down_1 = self.down_1(input)
         down_2 = self.down_2(input)
         down_3 = self.down_3(input)
 
+        output0 = self.init_conv(input)
         output0_cat = self.bn_prelu_1(torch.cat([output0, down_1], 1))
+        features.append(output0_cat)
 
         # CFP Block 1
         output1_0 = self.downsample_1(output0_cat)
         output1 = self.CFP_Block_1(output1_0)
         output1_cat = self.bn_prelu_2(torch.cat([output1, output1_0, down_2], 1))
+        features.append(output1_cat)
 
         # CFP Block 2
         output2_0 = self.downsample_2(output1_cat)
         output2 = self.CFP_Block_2(output2_0)
         output2_cat = self.bn_prelu_3(torch.cat([output2, output2_0, down_3], 1))
+        features.append(output2_cat)
 
-        return output2_cat
+        if self.return_features:
+            return features
+        else:
+            return output2_cat
     
 
-class EncoderDecoderWrapper(nn.Module):
+class EncoderDecoderWrapperDeprecated(nn.Module):
     def __init__(self, img_channels, encoder, features):
         super().__init__()
         self.encoder = encoder
@@ -311,3 +319,33 @@ class EncoderDecoderWrapper(nn.Module):
             x = self.deconvs[i](torch.cat([x, features[-i - 1]], dim=1))
         return x
 
+class EncoderDecoderWrapper(nn.Module):
+    def __init__(self, encoder, deconv_feats):
+        super().__init__()
+        self.encoder = encoder
+        self.deconvs = nn.ModuleList()
+        for nIn, nOut in deconv_feats[:-1]:
+            self.deconvs.append(DeConv(nIn, nOut, 2, 2, padding=0, output_padding=0, bn_acti=True))
+        self.deconvs.append(nn.Sequential(
+            Conv(deconv_feats[-1][0], deconv_feats[-1][1], 1, 1, padding=0, bn_acti=False),
+            nn.BatchNorm2d(deconv_feats[-1][1], eps=1e-3),
+        ))
+
+    def forward(self, x):
+        features = self.encoder(x)
+        deconv = self.deconvs[0](features[-1])
+        for i in range(1, len(features)):
+            deconv = self.deconvs[i](torch.cat([deconv, features[-i - 1]], dim=1))
+        deconv = self.deconvs[-1](deconv)
+        return features[-1], deconv
+
+
+def create_model(model_name, img_channels):
+    if model_name == 'CFPEncoder':
+        return CFPEncoder(img_channels, 2, 6, False)
+    elif model_name == 'CFPNet':
+        return EncoderDecoderWrapper(CFPEncoder(img_channels, 2, 6, True),
+                                        # [(256 + img_channels, 128), (128, 64), (64, 32), (32, 1)])
+                                        [(256 + img_channels, 128), (257, 64), (97, 32), (32, 1)])
+    else:
+        raise ValueError('Model name {} is not supported'.format(model_name))

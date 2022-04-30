@@ -7,7 +7,7 @@ from attention.siman import SimAMAttention
 from attention.resnet import BasicBlock, Bottleneck, ResLayer
 from models import _conv_block, Conv2d_init, FeatureNorm, GradientMultiplyLayer
 from CFPNet import CFPNetMed
-from CFPNetOrigin import CFPEncoder, Conv
+from CFPNetOrigin import CFPEncoder, Conv, create_model
 
 
 class LizNet(nn.Module):
@@ -31,7 +31,8 @@ class LizNet(nn.Module):
             self.volume = CFPNetMed(input_channels, True)
             self.seg_mask = nn.MaxPool2d(kernel_size=8, stride=8)
         else:
-            self.volume = CFPEncoder(input_channels)
+            self.volume = create_model("CFPNet", input_channels)
+            # self.volume = CFPEncoder(input_channels)
             self.seg_mask = nn.Sequential(
                 Conv2d_init(in_channels=256 + input_channels, out_channels=1, kernel_size=1, padding=0, bias=False),
                 SimAMAttention(),
@@ -85,7 +86,7 @@ class LizNet(nn.Module):
             seg_mask, volume = self.volume(x)
             seg_mask = self.seg_mask(seg_mask)
         else:
-            volume = self.volume(x) # 28.0
+            volume, final_mask = self.volume(x) # 28.0
             seg_mask = self.seg_mask(volume) # 28.0
 
         cat = torch.cat([volume, seg_mask], dim=1) # 28.2
@@ -109,5 +110,5 @@ class LizNet(nn.Module):
         fc_in = torch.cat([global_max_feat, global_avg_feat, global_max_seg, global_avg_seg], dim=1)
         fc_in = fc_in.reshape(fc_in.size(0), -1)
         prediction = self.fc(fc_in)
-        return prediction, seg_mask
+        return prediction, final_mask
 

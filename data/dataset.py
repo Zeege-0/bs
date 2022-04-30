@@ -125,6 +125,9 @@ class Dataset(torch.utils.data.Dataset):
         return x
 
     def distance_transform(self, mask: np.ndarray, max_val: float, p: float) -> np.ndarray:
+        if p == 0:
+            return np.ones_like(mask, dtype=np.float32)
+
         h, w = mask.shape[:2]
         dst_trf = np.zeros((h, w))
         
@@ -143,10 +146,13 @@ class Dataset(torch.utils.data.Dataset):
         return np.array(dst_trf, dtype=np.float32)
 
     def downsize(self, image: np.ndarray, downsize_factor: int = 8) -> np.ndarray:
-        img_t = torch.from_numpy(np.expand_dims(image, 0 if len(image.shape) == 3 else (0, 1)).astype(np.float32))
-        img_t = torch.nn.ReflectionPad2d(padding=(downsize_factor))(img_t)
-        image_np = torch.nn.AvgPool2d(kernel_size=2 * downsize_factor + 1, stride=downsize_factor)(img_t).detach().numpy()
-        return image_np[0] if len(image.shape) == 3 else image_np[0, 0]
+        if self.cfg.RESIZE_INPUT:
+            img_t = torch.from_numpy(np.expand_dims(image, 0 if len(image.shape) == 3 else (0, 1)).astype(np.float32))
+            img_t = torch.nn.ReflectionPad2d(padding=(downsize_factor))(img_t)
+            image_np = torch.nn.AvgPool2d(kernel_size=2 * downsize_factor + 1, stride=downsize_factor)(img_t).detach().numpy()
+            return image_np[0] if len(image.shape) == 3 else image_np[0, 0]
+        else:
+            return image.astype(np.float32)
 
     def rle_to_mask(self, rle, image_size):
         if len(rle) % 2 != 0:

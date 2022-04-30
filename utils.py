@@ -14,6 +14,7 @@ import cv2
 import torch
 import sklearn
 from sklearn import metrics
+import torch.nn as nn
 from timeit import default_timer as timer
 
 
@@ -42,7 +43,8 @@ def dice_coef(y_pred, y_true, reduce=True):
 def get_seg_metrics(pred, label):
     assert (pred.shape == label.shape) and (pred.ndim >= 3)
     with torch.no_grad():
-        
+        pred = nn.MaxPool2d(kernel_size=8, stride=8)(pred)
+        label = nn.MaxPool2d(kernel_size=8, stride=8)(label)
         ret = dict()
         pred = pred.detach().cpu()
         label = label.detach().cpu()
