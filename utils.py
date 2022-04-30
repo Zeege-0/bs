@@ -20,8 +20,8 @@ from timeit import default_timer as timer
 def jacard(y_pred, y_true, reduce=True):
     assert (y_pred.shape == y_true.shape) and (y_pred.ndim >= 3)
     N = y_pred.shape[0]
-    y_true_f = y_true.view(N, -1)
-    y_pred_f = (y_pred > 0.5).view(N, -1).type_as(y_true_f)
+    y_true_f = (y_true > 0.3).view(N, -1).type_as(y_true)
+    y_pred_f = (y_pred > 0.2).view(N, -1).type_as(y_true_f)
     intersection = torch.sum(y_true_f * y_pred_f, dim=1)
     union = torch.sum(y_true_f + y_pred_f - y_true_f * y_pred_f, dim=1) + 1e-10
     ret = intersection / union

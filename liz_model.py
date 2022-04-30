@@ -1,9 +1,10 @@
 import math
 import torch
 import torch.nn as nn
+from attention.convnext import ConvNextBlock, ConvNextLayer
 from attention.eca import ECAAttention
 from attention.siman import SimAMAttention
-from attention.resnet import BasicBlock, ResLayer
+from attention.resnet import BasicBlock, Bottleneck, ResLayer
 from models import _conv_block, Conv2d_init, FeatureNorm, GradientMultiplyLayer
 from CFPNet import CFPNetMed
 from CFPNetOrigin import CFPEncoder, Conv
@@ -35,8 +36,23 @@ class LizNet(nn.Module):
                 Conv2d_init(in_channels=256 + input_channels, out_channels=1, kernel_size=1, padding=0, bias=False),
                 SimAMAttention(),
                 FeatureNorm(num_features=1, eps=0.001, include_bias=False))
-        
-        
+
+        # self.extractor = nn.Sequential(
+        #     nn.MaxPool2d(kernel_size=2),
+        #     _conv_block(in_chanels=257 + input_channels, out_chanels=32, kernel_size=5, padding=2, attention='simam'),
+        #     nn.MaxPool2d(kernel_size=2),
+        #     _conv_block(in_chanels=32, out_chanels=64, kernel_size=5, padding=2, attention='simam'),
+        #     nn.MaxPool2d(kernel_size=2),
+        #     _conv_block(in_chanels=64, out_chanels=128, kernel_size=5, padding=2, attention='simam')
+        # )
+
+
+        # self.extractor = nn.Sequential(
+        #     nn.MaxPool2d(kernel_size=2),
+        #     ResLayer(Bottleneck, 257 + input_channels, 32, 2, 1),
+        #     ResLayer(Bottleneck, 32, 64, 2, 1),
+        #     ResLayer(Bottleneck, 64, 128, 2, 1),
+        # )
 
         self.extractor = nn.Sequential(
             nn.MaxPool2d(kernel_size=2),
@@ -44,13 +60,6 @@ class LizNet(nn.Module):
             ResLayer(BasicBlock, 32, 64, 2, 1),
             ResLayer(BasicBlock, 64, 128, 2, 1),
         )
-
-        # self.extractor = nn.Sequential(nn.MaxPool2d(kernel_size=2),
-        #                                _conv_block(in_chanels=64, out_chanels=128, kernel_size=5, padding=2),
-        #                                nn.MaxPool2d(kernel_size=2),
-        #                                _conv_block(in_chanels=128, out_chanels=256, kernel_size=5, padding=2),
-        #                                nn.MaxPool2d(kernel_size=2),
-        #                                _conv_block(in_chanels=256, out_chanels=512, kernel_size=5, padding=2))
 
         self.fc = nn.Sequential(
             nn.Linear(in_features=258, out_features=64),

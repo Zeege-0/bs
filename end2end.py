@@ -229,7 +229,7 @@ class End2End:
                     tensorboard_writer.add_scalar("Loss/Train/joined", epoch_loss, epoch)
                     tensorboard_writer.add_scalar("Accuracy/Train/", epoch_correct / samples_per_epoch, epoch)
 
-                if (epoch % validation_step == 0 or epoch == num_epochs - 1):
+                if (epoch > 0.3 * num_epochs) and (epoch % 5 == 0 or epoch == num_epochs - 1):
                     self._save_model(model, f"ep_{epoch:02}.pth")
 
                 if self.cfg.VALIDATE and (epoch % validation_step == 0 or epoch == num_epochs - 1):

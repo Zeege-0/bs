@@ -6,11 +6,32 @@
 # LICENSE file in the root directory of this source tree.
 
 
+from turtle import forward
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from timm.models.layers import trunc_normal_, DropPath
 from timm.models.registry import register_model
+
+
+class ConvNextLayer(nn.Module):
+    def __init__(self, in_channels, out_channels, blocks):
+        super(ConvNextLayer, self).__init__()
+        self.conv = nn.Sequential(
+            *[ConvNextBlock(in_channels) for _ in range(blocks)],
+            nn.BatchNorm2d(in_channels),
+            nn.Conv2d(in_channels, out_channels, kernel_size=2, stride=2)
+        )
+
+    def forward(self, x):
+        x = self.conv(x)
+        return x
+
+    def _init_weights(self, m):
+        if isinstance(m, (nn.Conv2d, nn.Linear)):
+            trunc_normal_(m.weight, std=.02)
+            nn.init.constant_(m.bias, 0)
+
 
 class ConvNextBlock(nn.Module):
     r""" ConvNeXt Block. There are two equivalent implementations:

@@ -1,8 +1,10 @@
 import math
+from turtle import forward
 import torch
 import torch.nn as nn
 from torch.nn import init
 from CFPNetOrigin import CFPEncoder
+from attention.gct import GCTAttention
 from attention.siman import SimAMAttention
 
 BATCHNORM_TRACK_RUNNING_STATS = False
@@ -15,9 +17,13 @@ class BNorm_init(nn.BatchNorm2d):
         init.zeros_(self.bias)
 
 
-class Conv2d_init(nn.Conv2d):
+class Conv2d_init(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True, padding_mode="zeros"):
-        super(Conv2d_init, self).__init__(in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias, padding_mode)
+        super(Conv2d_init, self).__init__()
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias, padding_mode)
+
+    def forward(self, x):
+        return self.conv(x)
 
     def reset_parameters(self):
         init.xavier_normal_(self.weight)
@@ -27,10 +33,17 @@ class Conv2d_init(nn.Conv2d):
             init.uniform_(self.bias, -bound, bound)
 
 
-def _conv_block(in_chanels, out_chanels, kernel_size, padding):
+def _conv_block(in_chanels, out_chanels, kernel_size, padding, attention=None):
+    if attention == 'simam':
+        attention = SimAMAttention()
+    elif attention == 'gct':
+        attention = GCTAttention(in_chanels)
+    else:
+        attention = nn.Identity()
+
     return nn.Sequential(Conv2d_init(in_channels=in_chanels, out_channels=out_chanels,
                                      kernel_size=kernel_size, padding=padding, bias=False),
-                         SimAMAttention(),
+                         attention,
                          FeatureNorm(num_features=out_chanels, eps=0.001),
                          nn.GELU())
 
@@ -74,7 +87,7 @@ class SegDecNet(nn.Module):
                                     _conv_block(64, 64, 5, 2),
                                     _conv_block(64, 64, 5, 2),
                                     nn.MaxPool2d(2),
-                                    _conv_block(64, 256, 15, 7))
+                                    _conv_block(64, 1024, 15, 7))
         
         seg_mask_channels = 256 + input_channels
         if use_hybrid:
@@ -82,11 +95,11 @@ class SegDecNet(nn.Module):
             seg_mask_channels = 512 + input_channels
 
         self.seg_mask = nn.Sequential(
-            Conv2d_init(in_channels=seg_mask_channels, out_channels=1, kernel_size=1, padding=0, bias=False),
+            Conv2d_init(in_channels=1024, out_channels=1, kernel_size=1, padding=0, bias=False),
             FeatureNorm(num_features=1, eps=0.001, include_bias=False))
 
         self.extractor = nn.Sequential(nn.MaxPool2d(kernel_size=2),
-                                       _conv_block(in_chanels=257, out_chanels=8, kernel_size=5, padding=2),
+                                       _conv_block(in_chanels=1025, out_chanels=8, kernel_size=5, padding=2),
                                        nn.MaxPool2d(kernel_size=2),
                                        _conv_block(in_chanels=8, out_chanels=16, kernel_size=5, padding=2),
                                        nn.MaxPool2d(kernel_size=2),
