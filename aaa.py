@@ -1,4 +1,4 @@
-from tqdm import tqdm
+from tqdm import tqdm, trange
 from models import SegDecNet
 from liz_model import LizNet
 from data.input_ksdd2 import KSDD2Dataset
@@ -10,9 +10,12 @@ from timeit import default_timer as timer
 import utils
 import numpy as np
 import thop
+import pandas as pd
+import os
+import cv2
 
 
-if __name__ == '__main__':
+if __name__ == '__main__d':
     device = 'cuda:0'
     # model = torch.load('/mnt/sdb1/home/zeege/remote/bs/dzfinal/STEEL/zzzmy_3000_3000/models/ep_90.pth').to(device)
     # model = torch.load('/mnt/sdb1/home/zeege/remote/bs/doutput/STEEL/simam_3000_3000/models/ep_90.pth').to(device)
@@ -37,7 +40,7 @@ if __name__ == '__main__':
         print(64 * 10 / acc)
 
 
-if __name__ == '__main_dd_':
+if __name__ == '__main__':
     config = Config()
     config.DATASET_PATH = '/mnt/sdb1/home/zeege/remote/bs/data/steel/'
     config.FREQUENCY_SAMPLING = True
@@ -51,11 +54,15 @@ if __name__ == '__main_dd_':
     config.DILATE = 0
     config.init_extra()
     eval_loader = get_dataset('TEST', config)
-    device = 'cuda:0'
+    device = 'cuda:1'
+    save_folder = "/mnt/sdb1/home/zeege/remote/bs/zfora"
     # model = LizNet(False, 'cuda:0', config.INPUT_WIDTH, config.INPUT_HEIGHT, config.INPUT_CHANNELS).to(device)
     # model.load_state_dict(torch.load('/mnt/sdb1/home/zeege/remote/bs/doutput/KSDD2/att_246_b816068ec/models/ep_75.pth').state_dict())
     # model = torch.load('/mnt/sdb1/home/zeege/remote/bs/dzfinal/STEEL/zzzmy_3000_3000/models/ep_90.pth').to(device)
-    model = torch.load('/mnt/sdb1/home/zeege/remote/bs/dzfinal/STEEL/gct/models/best_44_ap0.957_f0.896.pth').to(device)
+    # model = torch.load('/mnt/sdb1/home/zeege/remote/bs/dzfinal/STEEL/gct/models/best_44_ap0.957_f0.896.pth').to(device)
+    model = torch.load('/mnt/sdb1/home/zeege/remote/bs/dzfinal/STEEL/upsample_inv/models/best_42_ap0.991_f0.957.pth').to(device)
+    model.device = device
+    model.set_gradient_multipliers(0)
     predictions = []
     ground_truths = []
     res = []
@@ -124,3 +131,28 @@ if __name__ == '__main_dd_':
         if iii > 1:
             pbar.set_postfix({"fps": iii * config.BATCH_SIZE / time_acc})
         pbar.close()
+
+    torch.save(mts, f"{save_folder}/metrics.pth")
+    preds = res['decs'].max(dim=1)[1].type(torch.int)
+    gts = res['clazs'].max(dim=1)[1].type(torch.int)
+    df = pd.DataFrame(data={
+        'decision': preds,
+        'ground_truth': gts,
+        'img_name': res['sample_names']
+    })
+    df = pd.concat([df, pd.DataFrame(res['decs'])], axis=1)
+    df.to_csv("/mnt/sdb1/home/zeege/remote/bs/zfora/results.csv", index=False)
+
+    dsize = config.INPUT_WIDTH, config.INPUT_HEIGHT
+    for idx in trange(len(res["clazs"]), ncols=80):
+        image = res['images'][idx].permute(1, 2, 0).numpy()
+        pred_seg = res['pred_segs'][idx].permute(1, 2, 0).numpy()
+        seg_mask = res['true_segs'][idx].permute(1, 2, 0).numpy()
+        sample_name = res['sample_names'][idx]
+        prediction = preds[idx].item()
+        image = cv2.resize(image, dsize)
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        pred_seg = cv2.resize(pred_seg, dsize) if len(pred_seg.shape) == 4 else cv2.resize(pred_seg, dsize)
+        seg_mask = cv2.resize(seg_mask, dsize)
+        utils.plot_sample(sample_name, image, pred_seg, seg_mask, save_folder, decision=prediction, plot_seg=False)
+

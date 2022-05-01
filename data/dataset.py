@@ -73,11 +73,11 @@ class Dataset(torch.utils.data.Dataset):
                 raise Exception('For ON_DEMAND_READ image and seg_mask paths must be set in read_contents')
             img = self.read_img_resize(image_path, self.grayscale, self.image_size)
             if seg_mask_path is None:  # good sample
-                seg_mask = np.zeros_like(img)
+                seg_mask = np.ones_like(img)
             elif isinstance(seg_mask_path, list):
                 seg_mask = self.rle_to_mask(seg_mask_path, self.image_size)
             else:
-                seg_mask, _ = self.self.read_label_resize(seg_mask_path, self.image_size)
+                seg_mask, _ = self.read_label_resize(seg_mask_path, self.image_size)
 
             if np.max(seg_mask) == np.min(seg_mask):  # good sample
                 seg_loss_mask = np.ones_like(seg_mask)
@@ -110,7 +110,7 @@ class Dataset(torch.utils.data.Dataset):
             lbl = cv2.dilate(lbl, np.ones((dilate, dilate)))
         if resize_dim is not None:
             lbl = cv2.resize(lbl, dsize=resize_dim)
-        return np.array((lbl / 255.0), dtype=np.float32), np.max(lbl) > 0
+        return np.array((1 - lbl / 255.0), dtype=np.float32), np.max(lbl) > 0
 
     def to_tensor(self, x) -> torch.Tensor:
         if x.dtype != np.float32:
@@ -166,4 +166,4 @@ class Dataset(torch.utils.data.Dataset):
         for pos, le in zip(positions, length):
             mask_label[pos - 1:pos + le - 1] = 1
         mask = np.reshape(mask_label, (h, w), order='F').astype(np.uint8)
-        return mask
+        return 1 - mask

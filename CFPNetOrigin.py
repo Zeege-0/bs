@@ -328,7 +328,7 @@ class EncoderDecoderWrapper(nn.Module):
             self.deconvs.append(DeConv(nIn, nOut, 2, 2, padding=0, output_padding=0, bn_acti=True))
         self.deconvs.append(nn.Sequential(
             Conv(deconv_feats[-1][0], deconv_feats[-1][1], 1, 1, padding=0, bn_acti=False),
-            nn.BatchNorm2d(deconv_feats[-1][1], eps=1e-3),
+            # nn.BatchNorm2d(deconv_feats[-1][1], eps=1e-3),
         ))
 
     def forward(self, x):

@@ -99,8 +99,8 @@ class End2End:
                 decision, output_seg_mask = model(images)
 
                 # fake label for non segmented images
-                non_segmented_mask = ((is_segmented == False) & (claz[:, 0] == 1))
-                seg_masks[non_segmented_mask] = 1
+                non_segmented_mask = ((is_segmented == False) & (claz[:, 0] == 0))
+                # seg_masks[non_segmented_mask] = 1
                 # output_seg_mask[non_segmented_mask] = torch.Tensor([np.finfo(np.float32).max])
                 seg_loss_masks[non_segmented_mask] = 0
 
@@ -326,7 +326,7 @@ class End2End:
         confu = mts['confusion']
         FP = confu[0][1]
         FN = confu[1][0]
-        self._log(f"VALIDATION || AUROC: {mts['auroc']:.4f}, AP: {mts['ap']:.4f}, ACC: {mts['topk'][0]:.4f}, F1: {mts['f1']:.4f} || FP: {FP:d}, FN: {FN:d}"
+        self._log(f"|| AUROC: {mts['auroc']:.4f}, AP: {mts['ap']:.4f}, ACC: {mts['topk'][0]:.4f}, F1: {mts['f1']:.4f} || FP: {FP:d}, FN: {FN:d}"
                   f" || AUROC: {segmts['auroc']:.4f}, AP: {segmts['ap']:.4f}, DICE: {segmts['dice']:.4f}, JCCARD: {segmts['jacard']:.4f}")
         
         if not is_validation:
