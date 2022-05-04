@@ -1,3 +1,4 @@
+from turtle import forward
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -6,6 +7,17 @@ from attention.gct import GCTAttention
 from attention.siman import SimAMAttention
 
 __all__ = ["CFPNet"]
+
+
+class SequentialWithStream(nn.ModuleList):
+    def __init__(self):
+        super(SequentialWithStream, self).__init__()
+    
+    def forward(self, x, streams):
+        for module in self:
+            x = module(x, streams)
+        return x
+
 
 class DeConv(nn.Module):
     def __init__(self, nIn, nOut, kSize, stride, padding, output_padding, dilation=(1, 1), groups=1, bn_acti=False, bias=False):
@@ -146,44 +158,56 @@ class CFPModule(nn.Module):
         
         self.conv1x1 = Conv(nIn, nIn, 1, 1, padding=0, bn_acti=False, attention='simam')
         
-    def forward(self, input):
+    def forward(self, input, streams):
+
+        streams[0].wait_stream(torch.cuda.current_stream())
+        streams[1].wait_stream(torch.cuda.current_stream())
+
         inp = self.bn_relu_1(input)
         inp = self.conv1x1_1(inp)
         
-        o1_1 = self.dconv3x1_1_1(inp)
-        o1_1 = self.dconv1x3_1_1(o1_1)
-        o1_2 = self.dconv3x1_1_2(o1_1)
-        o1_2 = self.dconv1x3_1_2(o1_2)
-        o1_3 = self.dconv3x1_1_3(o1_2)
-        o1_3 = self.dconv1x3_1_3(o1_3)
-        
-        o2_1 = self.dconv3x1_2_1(inp)
-        o2_1 = self.dconv1x3_2_1(o2_1)
-        o2_2 = self.dconv3x1_2_2(o2_1)
-        o2_2 = self.dconv1x3_2_2(o2_2)
-        o2_3 = self.dconv3x1_2_3(o2_2)
-        o2_3 = self.dconv1x3_2_3(o2_3)        
+        with torch.cuda.stream(streams[0]):
+            o1_1 = self.dconv3x1_1_1(inp)
+            o1_1 = self.dconv1x3_1_1(o1_1)
+            o1_2 = self.dconv3x1_1_2(o1_1)
+            o1_2 = self.dconv1x3_1_2(o1_2)
+            o1_3 = self.dconv3x1_1_3(o1_2)
+            o1_3 = self.dconv1x3_1_3(o1_3)
+            output_1 = torch.cat([o1_1,o1_2,o1_3], 1)
+            
+            o2_1 = self.dconv3x1_2_1(inp)
+            o2_1 = self.dconv1x3_2_1(o2_1)
+            o2_2 = self.dconv3x1_2_2(o2_1)
+            o2_2 = self.dconv1x3_2_2(o2_2)
+            o2_3 = self.dconv3x1_2_3(o2_2)
+            o2_3 = self.dconv1x3_2_3(o2_3)
+            output_2 = torch.cat([o2_1,o2_2,o2_3], 1)
      
-        o3_1 = self.dconv3x1_3_1(inp)
-        o3_1 = self.dconv1x3_3_1(o3_1)
-        o3_2 = self.dconv3x1_3_2(o3_1)
-        o3_2 = self.dconv1x3_3_2(o3_2)
-        o3_3 = self.dconv3x1_3_3(o3_2)
-        o3_3 = self.dconv1x3_3_3(o3_3)               
-        
-        
-        o4_1 = self.dconv3x1_4_1(inp)
-        o4_1 = self.dconv1x3_4_1(o4_1)
-        o4_2 = self.dconv3x1_4_2(o4_1)
-        o4_2 = self.dconv1x3_4_2(o4_2)
-        o4_3 = self.dconv3x1_4_3(o4_2)
-        o4_3 = self.dconv1x3_4_3(o4_3)               
-        
-        
-        output_1 = torch.cat([o1_1,o1_2,o1_3], 1)
-        output_2 = torch.cat([o2_1,o2_2,o2_3], 1)      
-        output_3 = torch.cat([o3_1,o3_2,o3_3], 1)       
-        output_4 = torch.cat([o4_1,o4_2,o4_3], 1)   
+        with torch.cuda.stream(streams[1]):
+            o3_1 = self.dconv3x1_3_1(inp)
+            o3_1 = self.dconv1x3_3_1(o3_1)
+            o3_2 = self.dconv3x1_3_2(o3_1)
+            o3_2 = self.dconv1x3_3_2(o3_2)
+            o3_3 = self.dconv3x1_3_3(o3_2)
+            o3_3 = self.dconv1x3_3_3(o3_3)            
+            output_3 = torch.cat([o3_1,o3_2,o3_3], 1)
+            
+            o4_1 = self.dconv3x1_4_1(inp)
+            o4_1 = self.dconv1x3_4_1(o4_1)
+            o4_2 = self.dconv3x1_4_2(o4_1)
+            o4_2 = self.dconv1x3_4_2(o4_2)
+            o4_3 = self.dconv3x1_4_3(o4_2)
+            o4_3 = self.dconv1x3_4_3(o4_3)      
+            output_4 = torch.cat([o4_1,o4_2,o4_3], 1)
+
+        torch.cuda.current_stream().wait_stream(streams[0])
+        torch.cuda.current_stream().wait_stream(streams[1])
+
+        variables = locals()
+        for i in range(1, 5):
+            variables[f'output_{i}'].record_stream(torch.cuda.current_stream())
+            for j in range(1, 4):
+                variables[f'o{i}_{j}'].record_stream(streams[int((i - 1) / 2)])
         
         ad1 = output_1
         ad2 = ad1 + output_2
@@ -193,7 +217,7 @@ class CFPModule(nn.Module):
         output = self.bn_relu_2(output)
         output = self.conv1x1(output)
         
-        return output+input
+        return output + input
         
 
 class DownSamplingBlock(nn.Module):
@@ -256,7 +280,7 @@ class CFPEncoder(nn.Module):
         dilation_block_1 =[1, 3]
         # CFP Block 1
         self.downsample_1 = DownSamplingBlock(32 + img_channels, 64)
-        self.CFP_Block_1 = nn.Sequential()
+        self.CFP_Block_1 = SequentialWithStream()
         for i in range(0, block_1):
             self.CFP_Block_1.add_module("CFP_Module_1_" + str(i), 
                                         CFPModule(64, d=dilation_block_1[i]))
@@ -266,14 +290,14 @@ class CFPEncoder(nn.Module):
         # CFP Block 2
         dilation_block_2 = [4, 4, 8, 8, 16, 16] #camvid #cityscapes [4,4,8,8,16,16] # [4,8,16]
         self.downsample_2 = DownSamplingBlock(128 + img_channels, 128)
-        self.CFP_Block_2 = nn.Sequential()
+        self.CFP_Block_2 = SequentialWithStream()
         for i in range(0, block_2):
             self.CFP_Block_2.add_module("CFP_Module_2_" + str(i),
                                         CFPModule(128, d=dilation_block_2[i]))
         self.bn_prelu_3 = BNPReLU(256 + img_channels)
 
 
-    def forward(self, input):
+    def forward(self, input, streams):
         features = []
 
         down_1 = self.down_1(input)
@@ -286,13 +310,13 @@ class CFPEncoder(nn.Module):
 
         # CFP Block 1
         output1_0 = self.downsample_1(output0_cat)
-        output1 = self.CFP_Block_1(output1_0)
+        output1 = self.CFP_Block_1(output1_0, streams)
         output1_cat = self.bn_prelu_2(torch.cat([output1, output1_0, down_2], 1))
         features.append(output1_cat)
 
         # CFP Block 2
         output2_0 = self.downsample_2(output1_cat)
-        output2 = self.CFP_Block_2(output2_0)
+        output2 = self.CFP_Block_2(output2_0, streams)
         output2_cat = self.bn_prelu_3(torch.cat([output2, output2_0, down_3], 1))
         features.append(output2_cat)
 
@@ -301,23 +325,6 @@ class CFPEncoder(nn.Module):
         else:
             return output2_cat
     
-
-class EncoderDecoderWrapperDeprecated(nn.Module):
-    def __init__(self, img_channels, encoder, features):
-        super().__init__()
-        self.encoder = encoder
-        self.deconvs = []
-        prev_feat = features[-1]
-        for i in range(2, len(features) + 1):
-            self.deconvs.append(DeConv(prev_feat, features[-i], 3, 2, padding=1, output_padding=1, bn_acti=True))
-            prev_feat = features[-i] * 2
-        self.deconvs.append(Conv(prev_feat, img_channels, 1, 1, padding=1, bn_acti=True))
-
-    def forward(self, x):
-        features = self.encoder(x)
-        for i in range(0, len(self.deconvs)):
-            x = self.deconvs[i](torch.cat([x, features[-i - 1]], dim=1))
-        return x
 
 class EncoderDecoderWrapper(nn.Module):
     def __init__(self, encoder, deconv_feats):
@@ -330,6 +337,16 @@ class EncoderDecoderWrapper(nn.Module):
             Conv(deconv_feats[-1][0], deconv_feats[-1][1], 1, 1, padding=0, bn_acti=False),
             # nn.BatchNorm2d(deconv_feats[-1][1], eps=1e-3),
         ))
+
+    def forward_encoder(self, x, streams):
+        return self.encoder(x, streams)
+
+    def forward_decoder(self, features):
+        deconv = self.deconvs[0](features[-1])
+        for i in range(1, len(features)):
+            deconv = self.deconvs[i](torch.cat([deconv, features[-i - 1]], dim=1))
+        deconv = self.deconvs[-1](deconv)
+        return deconv
 
     def forward(self, x):
         features = self.encoder(x)

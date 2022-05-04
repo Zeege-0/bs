@@ -8,6 +8,7 @@ from attention.resnet import BasicBlock, Bottleneck, ResLayer
 from models import _conv_block, Conv2d_init, FeatureNorm, GradientMultiplyLayer
 from CFPNet import CFPNetMed
 from CFPNetOrigin import CFPEncoder, Conv, create_model
+from timeit import default_timer as timer
 
 
 class LizNet(nn.Module):
@@ -81,34 +82,60 @@ class LizNet(nn.Module):
         self.glob_max_lr_multiplier_mask = (torch.ones((1,)) * multiplier).to(self.device)
         self.glob_avg_lr_multiplier_mask = (torch.ones((1,)) * multiplier).to(self.device)
 
-    def forward(self, x):
+    def forward(self, x, streams):
         if self.use_med:
-            seg_mask, volume = self.volume(x)
-            seg_mask = self.seg_mask(seg_mask)
-        else:
-            volume, final_mask = self.volume(x) # 28.0
+            print("Med is not supported any more!!!!!!!!!!!!!!!")
+            raise NotImplementedError("Med is not supported any more!!!!!!!!!!!!!!!")
+
+        st = timer()
+
+        features = self.volume.forward_encoder(x, streams[:2])
+        volume = features[-1]
+
+        torch.cuda.current_stream().wait_stream(streams[0])
+        torch.cuda.current_stream().wait_stream(streams[1])
+
+        print("Volume: ", timer() - st)
+
+        with torch.cuda.stream(streams[0]):
+            st_1 = timer()
+            final_mask = self.volume.forward_decoder(features)
+            print("Final mask: ", timer() - st_1)
+
+        with torch.cuda.stream(streams[1]):
+            st_2 = timer()
             seg_mask = self.seg_mask(volume) # 28.0
+            cat = torch.cat([volume, seg_mask], dim=1) # 28.2
+            cat = self.volume_lr_multiplier_layer(cat, self.volume_lr_multiplier_mask)
 
-        cat = torch.cat([volume, seg_mask], dim=1) # 28.2
+            features = self.extractor(cat) # 28.4
+            global_max_feat = torch.max(torch.max(features, dim=-1, keepdim=True)[0], dim=-2, keepdim=True)[0]
+            global_avg_feat = torch.mean(features, dim=(-1, -2), keepdim=True)
+            global_max_seg = torch.max(torch.max(seg_mask, dim=-1, keepdim=True)[0], dim=-2, keepdim=True)[0]
+            global_avg_seg = torch.mean(seg_mask, dim=(-1, -2), keepdim=True)
 
-        cat = self.volume_lr_multiplier_layer(cat, self.volume_lr_multiplier_mask)
+            global_max_feat = global_max_feat.reshape(global_max_feat.size(0), -1)
+            global_avg_feat = global_avg_feat.reshape(global_avg_feat.size(0), -1)
 
-        features = self.extractor(cat) # 28.4
-        global_max_feat = torch.max(torch.max(features, dim=-1, keepdim=True)[0], dim=-2, keepdim=True)[0]
-        global_avg_feat = torch.mean(features, dim=(-1, -2), keepdim=True)
-        global_max_seg = torch.max(torch.max(seg_mask, dim=-1, keepdim=True)[0], dim=-2, keepdim=True)[0]
-        global_avg_seg = torch.mean(seg_mask, dim=(-1, -2), keepdim=True)
+            global_max_seg = global_max_seg.reshape(global_max_seg.size(0), -1)
+            global_max_seg = self.glob_max_lr_multiplier_layer(global_max_seg, self.glob_max_lr_multiplier_mask)
+            global_avg_seg = global_avg_seg.reshape(global_avg_seg.size(0), -1)
+            global_avg_seg = self.glob_avg_lr_multiplier_layer(global_avg_seg, self.glob_avg_lr_multiplier_mask)
 
-        global_max_feat = global_max_feat.reshape(global_max_feat.size(0), -1)
-        global_avg_feat = global_avg_feat.reshape(global_avg_feat.size(0), -1)
+            fc_in = torch.cat([global_max_feat, global_avg_feat, global_max_seg, global_avg_seg], dim=1)
+            fc_in = fc_in.reshape(fc_in.size(0), -1)
+            prediction = self.fc(fc_in)
+            print("FC: ", timer() - st_2)
 
-        global_max_seg = global_max_seg.reshape(global_max_seg.size(0), -1)
-        global_max_seg = self.glob_max_lr_multiplier_layer(global_max_seg, self.glob_max_lr_multiplier_mask)
-        global_avg_seg = global_avg_seg.reshape(global_avg_seg.size(0), -1)
-        global_avg_seg = self.glob_avg_lr_multiplier_layer(global_avg_seg, self.glob_avg_lr_multiplier_mask)
+        torch.cuda.current_stream().wait_stream(streams[0])
+        torch.cuda.current_stream().wait_stream(streams[1])
 
-        fc_in = torch.cat([global_max_feat, global_avg_feat, global_max_seg, global_avg_seg], dim=1)
-        fc_in = fc_in.reshape(fc_in.size(0), -1)
-        prediction = self.fc(fc_in)
+        for i in features:
+            i.record_stream(torch.cuda.current_stream())
+        final_mask.record_stream(torch.cuda.current_stream())
+        prediction.record_stream(torch.cuda.current_stream())
+        
+        print("Total: ", timer() - st)
+
         return prediction, final_mask
 

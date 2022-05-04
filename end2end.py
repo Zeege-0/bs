@@ -47,6 +47,8 @@ class End2End:
         self._create_results_dirs()
         self.print_run_params()
         self._save_params()
+        self._create_streams()
+        print("Created streams: ", self.streams)
         if self.cfg.REPRODUCIBLE_RUN:
             self._log("Reproducible run, fixing all seeds to:1337", LVL_DEBUG)
             np.random.seed(1337)
@@ -96,7 +98,7 @@ class End2End:
                 claz = torch.stack(_claz).T.to(device, non_blocking=True)
                 is_segmented = _is_segmented.to(device, non_blocking=True)
                 
-                decision, output_seg_mask = model(images)
+                decision, output_seg_mask = model(images, self.streams)
 
                 # fake label for non segmented images
                 non_segmented_mask = ((is_segmented == False) & (claz[:, 0] == 0))
@@ -289,7 +291,7 @@ class End2End:
                 claz = torch.stack(claz).T
 
                 start = timer()
-                prediction, pred_seg = model(image)
+                prediction, pred_seg = model(image, self.streams)
                 end = timer()
                 if iii > 1:
                     time_acc = time_acc + (end - start)
@@ -437,6 +439,9 @@ class End2End:
             os.remove(output_name)
 
         torch.save(model, output_name)
+
+    def _create_streams(self):
+        self.streams = [torch.cuda.Stream() for _ in range(2)]
 
     def _get_optimizer(self, model):
         if self.cfg.USE_SAM:

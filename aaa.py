@@ -15,29 +15,30 @@ import os
 import cv2
 
 
-if __name__ == '__main__d':
+if __name__ == '__main__':
     device = 'cuda:0'
     # model = torch.load('/mnt/sdb1/home/zeege/remote/bs/dzfinal/STEEL/zzzmy_3000_3000/models/ep_90.pth').to(device)
     # model = torch.load('/mnt/sdb1/home/zeege/remote/bs/doutput/STEEL/simam_3000_3000/models/ep_90.pth').to(device)
     # model = torch.load('/mnt/sdb1/home/zeege/remote/bs/doutput/STEEL/my_1500_1500/models/best_state_dict.pth').to(device)
     # model = SegDecNet(device, 1600, 256, 1, 1, False).to(device)
+    streams = [torch.cuda.Stream() for _ in range(2)]
     model = LizNet(False, device, 1600, 256, 1, 1).to(device)
     model.set_gradient_multipliers(0)
     torch.save(model, "/mnt/sdb1/home/zeege/remote/bs/model.pth")
     model.eval()
     with torch.no_grad():
-        data = torch.randn(64, 1, 1600, 256).to(device)
-        model(data)
-        flops, params = thop.profile(model, inputs=(torch.randn(1, 1, 1600, 256).to(device),), verbose=False)
-        flops, params = thop.clever_format([flops, params], "%.6f")
-        print(flops, params, end=' ')
+        data = torch.randn(8, 1, 1600, 256).to(device)
+        model(data, streams)
+        # flops, params = thop.profile(model, inputs=(torch.randn(1, 1, 1600, 256).to(device), streams), verbose=False)
+        # flops, params = thop.clever_format([flops, params], "%.6f")
+        # print(flops, params, end=' ')
         acc = 0
-        model(data)
+        model(data, streams)
         for i in range(10):
             st = timer()
-            model(data)
+            model(data, streams)
             acc += timer() - st
-        print(64 * 10 / acc)
+        print(8 * 10 / acc)
 
 
 if __name__ == '__main__':
@@ -54,13 +55,15 @@ if __name__ == '__main__':
     config.DILATE = 0
     config.init_extra()
     eval_loader = get_dataset('TEST', config)
-    device = 'cuda:1'
+    device = 'cuda:0'
     save_folder = "/mnt/sdb1/home/zeege/remote/bs/zfora"
-    # model = LizNet(False, 'cuda:0', config.INPUT_WIDTH, config.INPUT_HEIGHT, config.INPUT_CHANNELS).to(device)
+    plot_result = False
+    streams = [torch.cuda.Stream() for _ in range(2)]
+    model = LizNet(False, device, config.INPUT_WIDTH, config.INPUT_HEIGHT, config.INPUT_CHANNELS).to(device)
     # model.load_state_dict(torch.load('/mnt/sdb1/home/zeege/remote/bs/doutput/KSDD2/att_246_b816068ec/models/ep_75.pth').state_dict())
     # model = torch.load('/mnt/sdb1/home/zeege/remote/bs/dzfinal/STEEL/zzzmy_3000_3000/models/ep_90.pth').to(device)
     # model = torch.load('/mnt/sdb1/home/zeege/remote/bs/dzfinal/STEEL/gct/models/best_44_ap0.957_f0.896.pth').to(device)
-    model = torch.load('/mnt/sdb1/home/zeege/remote/bs/dzfinal/STEEL/upsample_inv/models/best_42_ap0.991_f0.957.pth').to(device)
+    # model = torch.load('/mnt/sdb1/home/zeege/remote/bs/dzfinal/STEEL/upsample_oneslike/models/ep_40.pth').to(device)
     model.device = device
     model.set_gradient_multipliers(0)
     predictions = []
@@ -87,7 +90,7 @@ if __name__ == '__main__':
                 claz = torch.stack(claz).T
 
                 start = timer()
-                prediction, pred_seg = model(image)
+                prediction, pred_seg = model(image, streams)
                 end = timer()
                 if iii > 1:
                     time_acc = time_acc + (end - start)
@@ -131,6 +134,9 @@ if __name__ == '__main__':
         if iii > 1:
             pbar.set_postfix({"fps": iii * config.BATCH_SIZE / time_acc})
         pbar.close()
+    
+    if not plot_result:
+        exit(0)
 
     torch.save(mts, f"{save_folder}/metrics.pth")
     preds = res['decs'].max(dim=1)[1].type(torch.int)
