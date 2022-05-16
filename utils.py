@@ -43,6 +43,8 @@ def dice_coef(y_pred, y_true, reduce=True):
 def get_seg_metrics(pred, label):
     assert (pred.shape == label.shape) and (pred.ndim >= 3)
     with torch.no_grad():
+        pred = 1 - pred
+        label = 1 - label
         pred = nn.MaxPool2d(kernel_size=8, stride=8)(pred)
         label = nn.MaxPool2d(kernel_size=8, stride=8)(label)
         ret = dict()

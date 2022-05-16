@@ -50,7 +50,7 @@ if __name__ == '__main__':
     config.WEIGHTED_SEG_LOSS_MAX = 1
     config.WEIGHTED_SEG_LOSS_P = 0
     config.DATASET = 'STEEL'
-    config.BATCH_SIZE = 128
+    config.BATCH_SIZE = 64
     config.DILATE = 0
     config.init_extra()
     eval_loader = get_dataset('TEST', config)
@@ -60,7 +60,7 @@ if __name__ == '__main__':
     # model.load_state_dict(torch.load('/mnt/sdb1/home/zeege/remote/bs/doutput/KSDD2/att_246_b816068ec/models/ep_75.pth').state_dict())
     # model = torch.load('/mnt/sdb1/home/zeege/remote/bs/dzfinal/STEEL/zzzmy_3000_3000/models/ep_90.pth').to(device)
     # model = torch.load('/mnt/sdb1/home/zeege/remote/bs/dzfinal/STEEL/gct/models/best_44_ap0.957_f0.896.pth').to(device)
-    model = torch.load('/mnt/sdb1/home/zeege/remote/bs/dzfinal/STEEL/upsample_inv/models/best_42_ap0.991_f0.957.pth').to(device)
+    model = torch.load('/mnt/sdb1/home/zeege/remote/bs/dzfinal/STEEL/upsample_inf/models/best_65_ap0.946_f0.871.pth').to(device)
     model.device = device
     model.set_gradient_multipliers(0)
     predictions = []
@@ -142,6 +142,7 @@ if __name__ == '__main__':
     })
     df = pd.concat([df, pd.DataFrame(res['decs'])], axis=1)
     df.to_csv("/mnt/sdb1/home/zeege/remote/bs/zfora/results.csv", index=False)
+    exit(1)
 
     dsize = config.INPUT_WIDTH, config.INPUT_HEIGHT
     for idx in trange(len(res["clazs"]), ncols=80):
