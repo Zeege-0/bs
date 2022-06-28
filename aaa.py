@@ -13,17 +13,19 @@ import thop
 import pandas as pd
 import os
 import cv2
+import torch.nn.functional as F
 
 
-if __name__ == '__main__d':
+if __name__ == '__main__':
     device = 'cuda:0'
     # model = torch.load('/mnt/sdb1/home/zeege/remote/bs/dzfinal/STEEL/zzzmy_3000_3000/models/ep_90.pth').to(device)
     # model = torch.load('/mnt/sdb1/home/zeege/remote/bs/doutput/STEEL/simam_3000_3000/models/ep_90.pth').to(device)
     # model = torch.load('/mnt/sdb1/home/zeege/remote/bs/doutput/STEEL/my_1500_1500/models/best_state_dict.pth').to(device)
     # model = SegDecNet(device, 1600, 256, 1, 1, False).to(device)
-    model = LizNet(False, device, 1600, 256, 1, 1).to(device)
-    model.set_gradient_multipliers(0)
-    torch.save(model, "/mnt/sdb1/home/zeege/remote/bs/model.pth")
+    model = torch.load('/mnt/sdb1/home/zeege/remote/bs/dzfinal/KSDD2/resori/models/ep_25.pth').to(device)
+    # model = LizNet(False, device, 1600, 256, 1, 1).to(device)
+    # model.set_gradient_multipliers(0)
+    # torch.save(model, "/mnt/sdb1/home/zeege/remote/bs/model.pth")
     model.eval()
     with torch.no_grad():
         data = torch.randn(64, 1, 1600, 256).to(device)
@@ -33,23 +35,26 @@ if __name__ == '__main__d':
         print(flops, params, end=' ')
         acc = 0
         model(data)
-        for i in range(10):
+        for i in range(20):
+            data = torch.randn(64, 1, 1600, 256).to(device)
             st = timer()
             model(data)
-            acc += timer() - st
-        print(64 * 10 / acc)
+            ed = timer()
+            acc += ed - st
+            print(ed - st, end=', ')
+        print(64 * 20 / acc)
 
 
 if __name__ == '__main__':
     config = Config()
-    config.DATASET_PATH = '/mnt/sdb1/home/zeege/remote/bs/data/steel/'
+    config.DATASET_PATH = '/mnt/sdb1/home/zeege/remote/bs/data/ksdd2/'
     config.FREQUENCY_SAMPLING = True
     config.RESIZE_INPUT = False
-    config.NUM_SEGMENTED = 3000
-    config.TRAIN_NUM = 3000
+    config.NUM_SEGMENTED = 246
+    config.TRAIN_NUM = 246
     config.WEIGHTED_SEG_LOSS_MAX = 1
     config.WEIGHTED_SEG_LOSS_P = 0
-    config.DATASET = 'STEEL'
+    config.DATASET = 'KSDD2'
     config.BATCH_SIZE = 64
     config.DILATE = 0
     config.init_extra()
@@ -60,7 +65,8 @@ if __name__ == '__main__':
     # model.load_state_dict(torch.load('/mnt/sdb1/home/zeege/remote/bs/doutput/KSDD2/att_246_b816068ec/models/ep_75.pth').state_dict())
     # model = torch.load('/mnt/sdb1/home/zeege/remote/bs/dzfinal/STEEL/zzzmy_3000_3000/models/ep_90.pth').to(device)
     # model = torch.load('/mnt/sdb1/home/zeege/remote/bs/dzfinal/STEEL/gct/models/best_44_ap0.957_f0.896.pth').to(device)
-    model = torch.load('/mnt/sdb1/home/zeege/remote/bs/dzfinal/STEEL/upsample_inf/models/best_65_ap0.946_f0.871.pth').to(device)
+    # model = torch.load('/mnt/sdb1/home/zeege/remote/bs/dzfinal/STEEL/upsample_inf/models/best_65_ap0.946_f0.871.pth').to(device)
+    model = torch.load('/mnt/sdb1/home/zeege/remote/bs/doutput/KSDD2/playground/models/best_48_ap0.940_f0.954.pth').to(device)
     model.device = device
     model.set_gradient_multipliers(0)
     predictions = []
@@ -89,6 +95,11 @@ if __name__ == '__main__':
                 start = timer()
                 prediction, pred_seg = model(image)
                 end = timer()
+
+                # pred_seg, volume = model.volume(image)
+                # pred_seg = model.seg_mask(pred_seg)
+                # pred_seg = F.interpolate(pred_seg, seg_mask.shape[2:], mode='bilinear', align_corners=False)
+
                 if iii > 1:
                     time_acc = time_acc + (end - start)
 
@@ -142,7 +153,7 @@ if __name__ == '__main__':
     })
     df = pd.concat([df, pd.DataFrame(res['decs'])], axis=1)
     df.to_csv("/mnt/sdb1/home/zeege/remote/bs/zfora/results.csv", index=False)
-    exit(1)
+    # exit(1)
 
     dsize = config.INPUT_WIDTH, config.INPUT_HEIGHT
     for idx in trange(len(res["clazs"]), ncols=80):

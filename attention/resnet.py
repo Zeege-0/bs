@@ -313,10 +313,26 @@ def ResLayer(block, inplanes, planes, blocks, stride=1, attention_module=SimAMAt
 
 
 if __name__ == '__main__':
-    model = ResLayer(BasicBlock, 64, 64, 3, attention_module=SimAMAttention)
+    model = ResNet(BasicBlock, [2, 2, 2, 2])
     model.eval()
-    x = torch.randn(32, 64, 225, 224)
+    x = torch.randn(32, 3, 225, 224)
     y = model(x)
+    x = model.conv1(x)
+    print(x.shape)
+    x = model.bn1(x)
+    print(x.shape)
+    x = model.relu(x)
+    print(x.shape)
+    x = model.maxpool(x)
+    print(x.shape)
+    x = model.layer1(x)
+    print(x.shape)
+    x = model.layer2(x)
+    print(x.shape)
+    x = model.layer3(x)
+    print(x.shape)
+    x = model.layer4(x)
+    print(x.shape)
     print(y.shape)
 
 

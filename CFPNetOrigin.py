@@ -340,12 +340,56 @@ class EncoderDecoderWrapper(nn.Module):
         return features[-1], deconv
 
 
+class UnetWrapper(nn.Module):
+    def __init__(self, encoder, deconv_feats):
+        super().__init__()
+        self.encoder = encoder
+        self.deconvs = nn.ModuleList()
+        for nIn, nOut in deconv_feats[:-1]:
+            self.deconvs.append(nn.Sequential(
+                nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+                Conv(nIn, nOut, 3, 1, padding=1, bn_acti=True, attention='simam')
+            ))
+        self.deconvs.append(nn.Sequential(
+            Conv(deconv_feats[-1][0], deconv_feats[-1][1], 5, 1, padding=2, bn_acti=False, attention='simam'),
+            # nn.BatchNorm2d(deconv_feats[-1][1], eps=1e-3),
+        ))
+
+    def forward(self, x):
+        features = self.encoder(x)
+        deconv = self.deconvs[0](features[-1])
+        for i in range(1, len(features)):
+            deconv = self.deconvs[i](torch.cat([deconv, features[-i - 1]], dim=1))
+        deconv = self.deconvs[-1](deconv)
+        return features[-1], self.interp(deconv)
+
+
+
+
+class InterpolateWrapper(nn.Module):
+    def __init__(self, encoder, scale_factor=8):
+        super().__init__()
+        self.encoder = encoder
+        self.conv = Conv(259, 1, 15, 1, padding=7, bn_acti=False)
+        self.interp = nn.Upsample(scale_factor=scale_factor, mode='bilinear', align_corners=False)
+
+    def forward(self, x):
+        features = self.encoder(x)
+        conv = self.conv(features[-1])
+        return features[-1], self.interp(conv)
+
+
 def create_model(model_name, img_channels):
     if model_name == 'CFPEncoder':
         return CFPEncoder(img_channels, 2, 6, False)
     elif model_name == 'CFPNet':
         return EncoderDecoderWrapper(CFPEncoder(img_channels, 2, 6, True),
                                         # [(256 + img_channels, 128), (128, 64), (64, 32), (32, 1)])
+                                        [(256 + img_channels, 128), (257, 64), (97, 32), (32, 1)])
+    elif model_name == 'Interpolate':
+        return InterpolateWrapper(CFPEncoder(img_channels, 2, 6, True), scale_factor=8)
+    elif model_name == "Unet":
+        return UnetWrapper(CFPEncoder(img_channels, 2, 6, True),
                                         [(256 + img_channels, 128), (257, 64), (97, 32), (32, 1)])
     else:
         raise ValueError('Model name {} is not supported'.format(model_name))

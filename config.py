@@ -1,6 +1,6 @@
 class Config:
 
-    MY = None
+    MODEL = None
     RESIZE_INPUT = None
     USE_MED = None
     USE_SAM = None
@@ -102,7 +102,7 @@ class Config:
             raise Exception('Unknown dataset {}'.format(self.DATASET))
 
     def merge_from_args(self, args):
-        self.MY = args.MY
+        self.MODEL = args.MODEL
         self.RESIZE_INPUT = args.RESIZE_INPUT
         self.USE_MED = args.USE_MED
         self.USE_SAM = args.USE_SAM
@@ -139,7 +139,7 @@ class Config:
 
     def get_as_dict(self):
         params = {
-            "MY": self.MY,
+            "MODEL": self.MODEL,
             "RESIZE_INPUT": self.RESIZE_INPUT,
             "USE_MED": self.USE_MED,
             "USE_SAM": self.USE_SAM,
@@ -181,7 +181,7 @@ class Config:
 def load_from_dict(dictionary):
     cfg = Config()
 
-    cfg.MY = dictionary.get("MY", None)
+    cfg.MODEL = dictionary.get("MODEL", None)
     cfg.RESIZE_INPUT = dictionary.get("RESIZE_INPUT", None)
     cfg.USE_MED = dictionary.get("USE_MED", None)
     cfg.USE_SAM = dictionary.get("USE_SAM", None)

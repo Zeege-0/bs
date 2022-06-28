@@ -68,7 +68,7 @@ class FeatureNorm(nn.Module):
 
 
 class SegDecNet(nn.Module):
-    def __init__(self, device, input_width, input_height, input_channels, classes=1, use_hybrid=True):
+    def __init__(self, device, input_width, input_height, input_channels, classes=1, use_hybrid=False):
         super(SegDecNet, self).__init__()
         if input_width % 8 != 0 or input_height % 8 != 0:
             raise Exception(f"Input size must be divisible by 8! width={input_width}, height={input_height}")

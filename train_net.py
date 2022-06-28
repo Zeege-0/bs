@@ -10,7 +10,7 @@ def str2bool(v):
 def get_parser():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--MY', type=str2bool, required=True, help='Whether to use MY model')
+    parser.add_argument('--MODEL', type=str, required=True, help='Whether to use MY model')
     parser.add_argument('--RESIZE_INPUT', type=str2bool, required=True, help='Whether to resize input')
     parser.add_argument('--USE_MED', type=str2bool, required=True, help='Whether to use CFP-Med')
     parser.add_argument('--USE_SAM', type=str2bool, required=True, help='Whether to use SAM')

@@ -1,5 +1,11 @@
 from multiprocessing import Pool
 import matplotlib
+from CFPNetOrigin import create_model
+from attention.segs import CFPNetRealOrigin
+from attention.resori import ResnetOrigin
+from attention.effori import EfficinetNetOrigin
+
+from attention.effnet import EfficinetNet
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -277,7 +283,7 @@ class End2End:
                 'true_segs': [],
                 'images': []
             }
-
+            
             if is_validation:
                 pbar = utils.FakeTqdm(total=len(eval_loader))
             else:
@@ -476,10 +482,20 @@ class End2End:
         list(map(utils.create_folder, [self.run_path, self.model_path, self.outputs_path, ]))
 
     def _get_model(self):
-        if self.cfg.MY:
+        if self.cfg.MODEL == 'MY':
             seg_net = LizNet(self.cfg.USE_MED, self._get_device(), self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT, self.cfg.INPUT_CHANNELS, classes=2)
-        else:
+        elif self.cfg.MODEL == 'EFF':
+            seg_net = EfficinetNet(self.cfg.INPUT_CHANNELS, num_classes=2)
+        elif self.cfg.MODEL == 'SD':
             seg_net = SegDecNet(self._get_device(), self.cfg.INPUT_WIDTH, self.cfg.INPUT_HEIGHT, self.cfg.INPUT_CHANNELS, classes=2)
+        elif self.cfg.MODEL == 'EFF_ORI':
+            seg_net = EfficinetNetOrigin(self.cfg.INPUT_CHANNELS, num_classes=2)
+        elif self.cfg.MODEL == 'RES_ORI':
+            seg_net = ResnetOrigin(pretrained=False, num_classes=2)
+        elif self.cfg.MODEL == 'CFP_ORI':
+            seg_net = CFPNetRealOrigin(self.cfg.INPUT_CHANNELS)
+        else:
+            raise NotImplementedError(f"Model {self.cfg.MODEL} not implemented")
         return seg_net
 
     def print_run_params(self):

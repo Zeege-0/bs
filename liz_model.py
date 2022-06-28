@@ -31,7 +31,7 @@ class LizNet(nn.Module):
             self.volume = CFPNetMed(input_channels, True)
             self.seg_mask = nn.MaxPool2d(kernel_size=8, stride=8)
         else:
-            self.volume = create_model("CFPNet", input_channels)
+            self.volume = create_model("Interpolate", input_channels)
             # self.volume = CFPEncoder(input_channels)
             self.seg_mask = nn.Sequential(
                 Conv2d_init(in_channels=256 + input_channels, out_channels=1, kernel_size=1, padding=0, bias=False),

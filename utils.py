@@ -51,7 +51,7 @@ def get_seg_metrics(pred, label):
         pred = pred.detach().cpu()
         label = label.detach().cpu()
         linpred = pred.flatten()
-        linlab = (label.flatten() > 0.3).type_as(linpred)
+        linlab = (label.flatten() > 0.6).type_as(linpred)
 
         ret['ap'] = metrics.average_precision_score(linlab, linpred.flatten())
         ret['auroc'] = metrics.roc_auc_score(linlab, linpred.flatten())
@@ -201,7 +201,7 @@ def plot_sample(image_name, image, segmentation, label, save_dir, decision=None,
     plt.title('Input image')
     if image.shape[0] < image.shape[1]:
         image = np.transpose(image, axes=[1, 0, 2])
-        segmentation = np.transpose(segmentation)
+        segmentation = np.transpose(1 - segmentation)
         label = np.transpose(label)
     if image.shape[2] == 1:
         plt.imshow(image, cmap="gray")
